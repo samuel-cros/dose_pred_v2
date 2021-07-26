@@ -34,15 +34,17 @@ for key in list(h5_file.keys()):
     
     # Manage isodose
     # - convert to nearest 10
-    # - standardize according to dose min/max across patients
-    isodose = standardize_rd(np.round(dose/10)*10)
+    # - standardize according to dose min/max across patients (CAN't if we want a crossentropy-like loss)
+    #isodose = standardize_rd(np.round(dose/10)*10)
+    # - OR don't normalize
+    isodose = np.round(dose/10)
     
     # Test it visually
     '''
     image = None
     for h in range(isodose.shape[2]):
         if image is None:
-            image = plt.imshow(isodose[:, :, h], cmap='jet', vmin=0, vmax=1)
+            image = plt.imshow(isodose[:, :, h], cmap='jet', vmin=0, vmax=7) # resp vmax=1
         else:
             image.set_data(isodose[:, :, h])
         plt.pause(0.0001)
@@ -51,6 +53,11 @@ for key in list(h5_file.keys()):
     
     # Add to the dataset
     #'''
+    # Delete the entry if it already exists
+    if key in h5_file.keys():
+        if 'isodose' in h5_file[key].keys():
+            del h5_file[key + '/isodose']
+    # Add
     h5_file.create_dataset(key + '/isodose',
                            data=isodose,
                            compression='gzip')
@@ -77,6 +84,11 @@ for key in list(h5_file.keys()):
     
     # Add to the dataset
     #'''
+    # Delete the entry if it already exists
+    if key in h5_file.keys():
+        if 'edges' in h5_file[key].keys():
+            del h5_file[key + '/edges']
+    # Add
     h5_file.create_dataset(key + '/edges',
                            data=edges,
                            compression='gzip')
