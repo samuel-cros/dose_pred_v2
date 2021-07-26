@@ -72,9 +72,12 @@ parser.add_argument('-mname', '--model_name', type=str, required=True,
 parser.add_argument('-set', '--kind_of_set', type=str, required=True)
 parser.add_argument('-ids', '--list_of_ids', nargs='+', type=str, 
                     required=False, help='List of ids to test')
+parser.add_argument('-use_shared_encoder', action='store_true', 
+                    help='Use the shared-encoder version of the U-Net')
 
 # Additional defaults
-parser.set_defaults(use_ct=False, use_gy=False, use_smaller_intervals=False)
+parser.set_defaults(use_ct=False, use_gy=False, use_smaller_intervals=False,
+use_shared_encoder=False)
 args = parser.parse_args()
 
 ###############################################################################
@@ -146,10 +149,10 @@ if args.test_mode == 'generate_predictions':
         # Prediction
         t0 = time.time()
         prediction = \
-            model.predict(np.expand_dims(dataset[id]['input'], axis=0))[0, :, :, :, 0]
+            model.predict(np.expand_dims(dataset[id]['input'], axis=0))[0, :, :, :, :]
                     
         # Masking using the body channel
-        prediction *= body
+        prediction *= np.expand_dims(body, axis=-1)
         
         print("Time spent predicting:", time.time() - t0)
         
@@ -221,7 +224,9 @@ elif args.test_mode == 'evaluate_predictions':
         row = {}
         row['ID'] = id
     
-        plan = unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, file))['arr_0'])
+        plan = \
+            unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                  file))['arr_0'][:, :, :, 0])
 
         '''
         plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)

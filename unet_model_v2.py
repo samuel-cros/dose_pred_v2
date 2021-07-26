@@ -477,7 +477,8 @@ def hdunet_3D(input_size, n_output_channels, dropout_value,
 ###############################################################################
 # BRANCH UNET
 def branch_unet_3D(input_size, n_output_channels, dropout_value,
-                   n_convolutions_per_block, optim, lr, loss, final_activation):
+                   n_convolutions_per_block, optim, lr, loss, final_activation,
+                   use_attention):
     inputs = Input(input_size)
 
     ###########################################################################
@@ -509,19 +510,19 @@ def branch_unet_3D(input_size, n_output_channels, dropout_value,
     # - dose prediction
     
     # x256 layers going up
-    deconv256_dose = up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
+    deconv256_dose = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
                               inner_activation, kernel_value, batch_norm, 
                               dropout_value)
     # x128 layers going up
-    deconv128_dose = up_conv_block(128, deconv256_dose, conv128, 
+    deconv128_dose = up_conv_block_att(128, deconv256_dose, conv128, 
                               n_convolutions_per_block, inner_activation, 
                               kernel_value, batch_norm, dropout_value)
     # x64 layers going up
-    deconv64_dose = up_conv_block(64, deconv128_dose, conv64, n_convolutions_per_block, 
+    deconv64_dose = up_conv_block_att(64, deconv128_dose, conv64, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
     # x32 layers going up
-    deconv32_dose = up_conv_block(32, deconv64_dose, conv32, n_convolutions_per_block, 
+    deconv32_dose = up_conv_block_att(32, deconv64_dose, conv32, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
 
@@ -534,19 +535,19 @@ def branch_unet_3D(input_size, n_output_channels, dropout_value,
     # - isodose prediction
     
     # x256 layers going up
-    deconv256_isodose = up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
+    deconv256_isodose = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
                               inner_activation, kernel_value, batch_norm, 
                               dropout_value)
     # x128 layers going up
-    deconv128_isodose = up_conv_block(128, deconv256_isodose, conv128, 
+    deconv128_isodose = up_conv_block_att(128, deconv256_isodose, conv128, 
                               n_convolutions_per_block, inner_activation, 
                               kernel_value, batch_norm, dropout_value)
     # x64 layers going up
-    deconv64_isodose = up_conv_block(64, deconv128_isodose, conv64, n_convolutions_per_block, 
+    deconv64_isodose = up_conv_block_att(64, deconv128_isodose, conv64, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
     # x32 layers going up
-    deconv32_isodose = up_conv_block(32, deconv64_isodose, conv32, n_convolutions_per_block, 
+    deconv32_isodose = up_conv_block_att(32, deconv64_isodose, conv32, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
 
@@ -559,19 +560,19 @@ def branch_unet_3D(input_size, n_output_channels, dropout_value,
     # - edges prediction
     
     # x256 layers going up
-    deconv256_edges = up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
+    deconv256_edges = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
                               inner_activation, kernel_value, batch_norm, 
                               dropout_value)
     # x128 layers going up
-    deconv128_edges = up_conv_block(128, deconv256_edges, conv128, 
+    deconv128_edges = up_conv_block_att(128, deconv256_edges, conv128, 
                               n_convolutions_per_block, inner_activation, 
                               kernel_value, batch_norm, dropout_value)
     # x64 layers going up
-    deconv64_edges = up_conv_block(64, deconv128_edges, conv64, n_convolutions_per_block, 
+    deconv64_edges = up_conv_block_att(64, deconv128_edges, conv64, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
     # x32 layers going up
-    deconv32_edges = up_conv_block(32, deconv64_edges, conv32, n_convolutions_per_block, 
+    deconv32_edges = up_conv_block_att(32, deconv64_edges, conv32, n_convolutions_per_block, 
                              inner_activation, kernel_value, batch_norm, 
                              dropout_value)
 
