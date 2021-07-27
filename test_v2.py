@@ -60,7 +60,7 @@ def get_biggest_tv(input_data):
 ## Args
 ###############################################################################
 
-parser = argparse.ArgumentParser(description='Generate a predicted patch')
+parser = argparse.ArgumentParser(description='Generate or evaluate a prediction')
 
 # Arguments            
 parser.add_argument('-mode', '--test_mode', type=str, required=True,
@@ -206,8 +206,13 @@ elif args.test_mode == 'evaluate_predictions':
     # Go through the predictions
     list_of_predictions = os.listdir(path_to_predicted_volumes)
     list_of_predictions.remove('metrics_pred.csv')
+    list_of_predictions.remove('metrics_pred_rf.csv')
 
     # Remove troubling cases
+    if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
+    if '668957.npz' in list_of_predictions: list_of_predictions.remove('668957.npz')
+    if '7021217.npz' in list_of_predictions: list_of_predictions.remove('7021217.npz')
+    if '5010908.npz' in list_of_predictions: list_of_predictions.remove('5010908.npz')
     #list_IDs.remove('5447536')
     #list_of_predictions = ['978722.npz']
     
@@ -224,9 +229,14 @@ elif args.test_mode == 'evaluate_predictions':
         row = {}
         row['ID'] = id
     
-        plan = \
-            unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
-                                                  file))['arr_0'][:, :, :, 0])
+        if args.use_shared_encoder:
+            plan = \
+                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                    file))['arr_0'][:, :, :, 0])
+        else:
+            plan = \
+                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                    file))['arr_0'][:, :, :])
 
         '''
         plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)
@@ -472,9 +482,9 @@ elif args.test_mode == 'evaluate_predictions':
                 average_row[field][subfield] /= count_struct_m_dose[subfield]
         elif isinstance(average_row[field], dict):
             for subfield in average_row[field]:
-                average_row[field][subfield] /= len(list_IDs)
+                average_row[field][subfield] /= len(list_of_predictions)
         else:
-            average_row[field] /= len(list_IDs)
+            average_row[field] /= len(list_of_predictions)
         
     average_row['ID'] = 'Average'
     metrics_pred_writer.writerow(average_row)
@@ -484,5 +494,166 @@ elif args.test_mode == 'evaluate_predictions':
     ###########################################################################  
     metrics_pred_csv.close()
 
+###############################################################################
+###############################################################################
+# EVALUATE PREDICTIONS RF (Refactored)
+###############################################################################
+###############################################################################
+# - predictions need to be generated prior to running this code
+# - generates a csv file with the evaluation results associated with the
+# given predictions (path to a folder)
+elif args.test_mode == 'evaluate_predictions_rf':
+    
+    ###########################################################################
+    # Setup
+    ###########################################################################
+    # Setup paths
+    path_to_predicted_volumes = \
+        os.path.join(path_to_results, 
+                     'predicted_volumes_generate_predictions',)
+    Path(path_to_predicted_volumes).mkdir(parents=True, exist_ok=True)
+    
+    # Setup CSV
+    metrics_pred_csv = open(os.path.join(path_to_predicted_volumes, 
+                                         'metrics_pred_rf.csv'), 
+                            'w',
+                            newline='')
 
+    smax_fields = ['Smax ' + str(i) for i in range(1, 21)]
+    smean_fields = ['Smean ' + str(i) for i in range(1, 21)]
+    fields = ['ID', 'D99', 'D98', 'D95', 'Dmax'] + smax_fields + \
+        smean_fields + ['H1', 'H2']
+    metrics_pred_writer = csv.DictWriter(metrics_pred_csv, fieldnames=fields)
+    metrics_pred_writer.writeheader()
+    
+    # Init average row
+    average_row = {}
+    for field_name in fields:
+        average_row[field_name] = 0
+    
+    # Count the number of structures so we can compute the average
+    # on the right number of patients (some patients lack segmentations)
+    count_struct_m_dose = {}
+    for s_field_name in smax_fields + smean_fields:
+        count_struct_m_dose[s_field_name] = 0
+    
+    # Go through the predictions
+    list_of_predictions = os.listdir(path_to_predicted_volumes)
+    list_of_predictions.remove('metrics_pred.csv')
+    list_of_predictions.remove('metrics_pred_rf.csv')
 
+    # Remove troubling cases
+    if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
+    if '668957.npz' in list_of_predictions: list_of_predictions.remove('668957.npz')
+    if '7021217.npz' in list_of_predictions: list_of_predictions.remove('7021217.npz')
+    if '5010908.npz' in list_of_predictions: list_of_predictions.remove('5010908.npz')
+    
+    #list_IDs.remove('5447536')
+    #list_of_predictions = ['2170598.npz', '171272.npz']
+    
+    ###########################################################################
+    # Main
+    ###########################################################################
+    for file in list_of_predictions:
+    
+        # Compute the metrics
+        
+        # Setup
+        id = file.split('.npz')[0]
+        print(id)
+        row = {}
+        row['ID'] = id
+    
+        if args.use_shared_encoder:
+            plan = \
+                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                    file))['arr_0'][:, :, :, 0])
+        else:
+            plan = \
+                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                    file))['arr_0'][:, :, :])
+
+        '''
+        plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)
+        plt.show()
+
+        sys.exit()
+        '''
+
+        tumor_segmentation_bin = get_biggest_tv(dataset[id]['input'])
+        prescribed_dose = dataset[id]['prescribed_dose'][()]/100
+        tumor_segmentation_gy = tumor_segmentation_bin * prescribed_dose
+            
+        #######################################################################
+        # PTV coverage (DXX)
+        #######################################################################        
+        # D99
+        coverage_value = 99
+        row['D99'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value)
+        average_row['D99'] += row['D99']
+        
+        # D98
+        coverage_value = 98
+        row['D98'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value)
+        average_row['D98'] += row['D98']
+
+        # D95
+        coverage_value = 95
+        row['D95'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value)
+        average_row['D95'] += row['D95']    
+        
+        #######################################################################
+        # Dmax (Maximum dose of the plan)
+        #######################################################################
+        row['Dmax'] = np.max(plan) 
+        average_row['Dmax'] += row['Dmax']    
+        
+        #######################################################################
+        # Structure max, mean dose (Dmax, Dmean)
+        #######################################################################
+        # Go along the masks stored between input[1] and input[20]
+        # as 0 is for the CT
+        for mask in range(1, dataset[id]['input'].shape[-1]):
+            
+            # if the mask is not empty
+            if dataset[id]['input'][:, :, :, mask].any():
+                row['Smax ' + str(mask)], row['Smean ' + str(mask)] = \
+                    structure_m_dose(plan, dataset[id]['input'][:, :, :, mask][()])
+                average_row['Smax ' + str(mask)] += row['Smax ' + str(mask)]
+                count_struct_m_dose['Smax ' + str(mask)] += 1 
+                average_row['Smean ' + str(mask)] += row['Smean ' + str(mask)]
+                count_struct_m_dose['Smean ' + str(mask)] += 1 
+        
+        #######################################################################
+        # Homogeneity 1 (Homogeneity)
+        #######################################################################
+        row['H1'] = homogeneity_1(plan, tumor_segmentation_gy)
+        average_row['H1'] += row['H1']
+
+        #######################################################################
+        # Homogeneity 2 (Dose homogeneity index DHI)
+        #######################################################################
+        row['H2'] = homogeneity_2(plan, tumor_segmentation_gy)
+        average_row['H2'] += row['H2']         
+        
+        # Write row
+        metrics_pred_writer.writerow(row)   
+        
+    ###########################################################################
+    # Compute average across patients
+    ###########################################################################
+    for field in average_row:
+        # Special treatment for structure max and mean dose since there is a chance
+        # to be lacking the segmentation
+        if field in smax_fields + smean_fields:
+            average_row[field] /= max(count_struct_m_dose[field], 1)
+        else:
+            average_row[field] /= len(list_of_predictions)
+        
+    average_row['ID'] = 'Average'
+    metrics_pred_writer.writerow(average_row)
+
+    ###########################################################################
+    # Cleanup
+    ###########################################################################  
+    metrics_pred_csv.close()
