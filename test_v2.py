@@ -10,6 +10,7 @@ from utils.data_standardization import rd_min_value, rd_max_value
 import keras
 from metrics import *
 from utils.data_standardization import unstandardize_rd
+from unet_model_v2 import mse_closs
 
 # IO
 import argparse
@@ -72,12 +73,12 @@ parser.add_argument('-mname', '--model_name', type=str, required=True,
 parser.add_argument('-set', '--kind_of_set', type=str, required=True)
 parser.add_argument('-ids', '--list_of_ids', nargs='+', type=str, 
                     required=False, help='List of ids to test')
-parser.add_argument('-use_shared_encoder', action='store_true', 
-                    help='Use the shared-encoder version of the U-Net')
+parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true', 
+                    help='Use additional consistency losses')
 
 # Additional defaults
 parser.set_defaults(use_ct=False, use_gy=False, use_smaller_intervals=False,
-use_shared_encoder=False)
+                    use_consistency_losses=False)
 args = parser.parse_args()
 
 ###############################################################################
@@ -118,8 +119,14 @@ if args.test_mode == 'generate_predictions':
     # Setup
     ########################################################################### 
     # Load model
-    model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
-                                                 args.model_name))
+    
+    if args.use_consistency_losses:
+        model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
+                                                    args.model_name),
+                                        custom_objects={'mse_closs': mse_closs})
+    else:
+        model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
+                                                    args.model_name))
      
     # Patch, prediction and channel dimension
     prediction_dim = (128, 128, None)
@@ -205,8 +212,8 @@ elif args.test_mode == 'evaluate_predictions':
     
     # Go through the predictions
     list_of_predictions = os.listdir(path_to_predicted_volumes)
-    list_of_predictions.remove('metrics_pred.csv')
-    list_of_predictions.remove('metrics_pred_rf.csv')
+    if 'metrics_pred.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred.csv')
+    if 'metrics_pred_rf.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_rf.csv')
 
     # Remove troubling cases
     if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
@@ -229,14 +236,9 @@ elif args.test_mode == 'evaluate_predictions':
         row = {}
         row['ID'] = id
     
-        if args.use_shared_encoder:
-            plan = \
-                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
-                                                    file))['arr_0'][:, :, :, 0])
-        else:
-            plan = \
-                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
-                                                    file))['arr_0'][:, :, :])
+        plan = \
+            unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                file))['arr_0'][:, :, :, 0])
 
         '''
         plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)
@@ -539,8 +541,8 @@ elif args.test_mode == 'evaluate_predictions_rf':
     
     # Go through the predictions
     list_of_predictions = os.listdir(path_to_predicted_volumes)
-    list_of_predictions.remove('metrics_pred.csv')
-    list_of_predictions.remove('metrics_pred_rf.csv')
+    if 'metrics_pred.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred.csv')
+    if 'metrics_pred_rf.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_rf.csv')
 
     # Remove troubling cases
     if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
@@ -563,15 +565,10 @@ elif args.test_mode == 'evaluate_predictions_rf':
         print(id)
         row = {}
         row['ID'] = id
-    
-        if args.use_shared_encoder:
-            plan = \
+        
+        plan = \
                 unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
                                                     file))['arr_0'][:, :, :, 0])
-        else:
-            plan = \
-                unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
-                                                    file))['arr_0'][:, :, :])
 
         '''
         plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)

@@ -6,6 +6,12 @@ from keras.layers import add, multiply, concatenate
 from keras import Model
 from keras.optimizers import Adam, RMSprop
 from metrics import *
+from keras import backend as K
+from scipy.ndimage import sobel, generic_gradient_magnitude
+from keras.losses import mean_squared_error
+import tensorflow as tf
+
+from utils.data_standardization import standardize_rd_tensor, unstandardize_rd_tensor
 
 ###############################################################################
 ## Parameters
@@ -39,7 +45,7 @@ def get_biggest_tv(input_data):
                 raise ValueError("Input should include at least one of " + \
                     "the following: ptv 1, ctv 1 or gtv 1.")
                 
-# Dose score
+# Dose score # TODO - differentiable?
 # Computes different metrics and gathers them into a score
 def dose_score(input_data, reference, prediction):
     
@@ -86,6 +92,99 @@ def custom_loss(input_data, factors, reference, prediction):
     return (factors[0] * keras.losses.mean_squared_error(reference, prediction) + \
             factors[1] * dose_score(input_data, reference, prediction))
     
+    
+## Consistency losses
+# > normalization / denormalization issue
+#   - isolines: done, to test
+#   - edges: not mandatory with mono branch
+# > 3D Sobel
+#   - done
+# > link with output, y_true or y_true[0] / y_true[1] / y_true[2] ?
+#   - computed on both pred and true at run time
+
+# Isodose consistency loss
+@tf.function
+def isodose_consistency_loss(y_true, y_pred):
+    
+    # Define isolines values
+    d_i_values = standardize_rd_tensor(tf.round(unstandardize_rd_tensor(y_true)))
+    
+    # # if dose_i > d_ip1, return || dose_i - d_ip1 ||_2
+    # if dose_i < d_i, return || dose_i - d_i ||_2
+    res_1 = tf.where(y_pred < d_i_values, tf.abs(y_pred - d_i_values), tf.abs(y_pred - (d_i_values + standardize_rd_tensor(1.0))))
+    
+    # if d_i < dose_i < d_ip1, return 0
+    res_2 = tf.where(tf.math.logical_and(y_pred >= d_i_values, y_pred <= (d_i_values + standardize_rd_tensor(1.0))), tf.zeros(tf.shape(res_1)), res_1) # )
+    
+    # MSE on res_2
+    return tf.math.reduce_sum(res_2 ** 2) / float(tf.math.reduce_prod(tf.shape(res_2)))
+    
+
+# Texture consistency loss
+@tf.function
+def texture_consistency_loss(y_true, y_pred):
+    
+    # Define sobel filters    
+    sobel_x = tf.constant([[[-1,  0,  1], [-2,  0,  2], [-1,  0,  1]],
+                           [[-2,  0,  2], [-4,  0,  4], [-2,  0,  2]],
+                           [[-1,  0,  1], [-2,  0,  2], [-1,  0,  1]]], tf.float32)
+    sobel_x_reshaped = tf.reshape(sobel_x, [3, 3, 3, 1, 1])
+    
+    sobel_y = tf.constant([[[-1, -2, -1], [-2, -4, -2], [-1, -2, -1]],
+                           [[ 0,  0,  0], [ 0,  0,  0], [ 0,  0,  0]],
+                           [[ 1,  2,  1], [ 2,  4,  2], [ 1,  2,  1]]], tf.float32)
+    sobel_y_reshaped = tf.reshape(sobel_y, [3, 3, 3, 1, 1])
+    
+    sobel_z = tf.constant([[[-1, -2, -1], [ 0,  0,  0], [ 1,  2,  1]],
+                           [[-2, -4, -2], [ 0,  0,  0], [ 2,  4,  2]],
+                           [[-1, -2, -1], [ 0,  0,  0], [ 1,  2,  1]]], tf.float32)
+    sobel_z_reshaped = tf.reshape(sobel_z, [3, 3, 3, 1, 1])
+    
+    # Compute on ref
+    y_true_filters_x = tf.nn.conv3d(input = y_true, 
+                             filters = sobel_x_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_true_filters_y = tf.nn.conv3d(input = y_true, 
+                             filters = sobel_y_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_true_filters_z = tf.nn.conv3d(input = y_true, 
+                             filters = sobel_z_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_true_filters = tf.stack([y_true_filters_x, y_true_filters_y, y_true_filters_z])
+    
+    # Compute on pred
+    y_pred_filters_x = tf.nn.conv3d(input = y_pred, 
+                             filters = sobel_x_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_pred_filters_y = tf.nn.conv3d(input = y_pred, 
+                             filters = sobel_y_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_pred_filters_z = tf.nn.conv3d(input = y_pred, 
+                             filters = sobel_z_reshaped,
+                             strides = [1, 1, 1, 1, 1],
+                             padding = 'SAME')
+    
+    y_pred_filters = tf.stack([y_pred_filters_x, y_pred_filters_y, y_pred_filters_z])
+    
+    # MSE on ref, pred
+    return mean_squared_error(y_pred_filters, y_true_filters)
+
+# MSE + Consistency losses
+def mse_closs(y_true, y_pred):
+    
+    return (2* mean_squared_error(y_true, y_pred) + \
+                1* isodose_consistency_loss(y_true, y_pred) + \
+                    1* texture_consistency_loss(y_true, y_pred)) / 4
 
 ###############################################################################
 ## Blocks 
@@ -146,9 +245,8 @@ def up_conv_block(output_size, previous_layer, skip_connections_layer,
     return block
 
 ###############################################################################
-# TODO TOTEST - reviewed
+# Up-Conv Block with attention - reviewed
 # source: https://github.com/lixiaolei1982/Keras-Implementation-of-U-Net-R2U-Net-Attention-U-Net-Attention-R2U-Net.-/blob/master/network.py
-# Up-Conv Block with attention
 # - Upsample + CONV on previous layer = phi_previous
 # - CONV on skip connection layer = theta_skip
 # - SUM(theta_skip, phi_previous) + RELU = f
@@ -157,7 +255,6 @@ def up_conv_block(output_size, previous_layer, skip_connections_layer,
 # - MUL(skip_connections_layer, rate) = attention
 # i.e skip_connection_layer modified by att
 # - resume with concatenation and convolutions
-# Rq: Conv3DTranspose? BN?
 def up_conv_block_att(output_size, previous_layer, skip_connections_layer, 
                   n_convolutions, activation, kernel_initializer, batch_norm, 
                   dropout):
@@ -322,7 +419,8 @@ def unet_3D(input_size, n_output_channels, dropout_value,
 # UNET
 def ablation_unet_3D(input_size, n_output_channels, dropout_value,
                      n_convolutions_per_block, optim, lr, loss, 
-                     final_activation, use_attention, use_dose_score):
+                     final_activation, use_attention, use_dose_score,
+                     use_consistency_losses):
     inputs = Input(input_size)
 
     ###########################################################################
@@ -392,10 +490,19 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
     else:
         raise NameError('Unknown optimizer.')
     
-    # Manage dose score
+    # Manage dose score - TODO
     if use_dose_score:
-        model.compile(optimizer = optimizer, loss = custom_loss(inputs, [100, 1]), 
+        model.compile(optimizer = optimizer, 
+                      loss = custom_loss(inputs, [100, 1]), 
                       metrics = [custom_loss(inputs, [100, 1])])
+        
+    # Consistency losses
+    elif use_consistency_losses:
+        model.compile(optimizer = optimizer, 
+                      loss = mse_closs, 
+                      metrics = [mse_closs])
+    
+    # Normal case
     else:
         model.compile(optimizer = optimizer, loss = loss, 
                       metrics = [loss])
@@ -406,8 +513,10 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
 
 ###############################################################################
 # HD-UNET
-def hdunet_3D(input_size, n_output_channels, dropout_value, 
-            n_convolutions_per_block, optim, lr, loss, final_activation):
+def ablation_hdunet_3D(input_size, n_output_channels, dropout_value, 
+            n_convolutions_per_block, optim, lr, loss, final_activation,
+            use_attention, use_consistency_losses):
+    
     inputs = Input(input_size)
     
     # Idea: fixed CONV 16 + Concat previous data
@@ -432,22 +541,29 @@ def hdunet_3D(input_size, n_output_channels, dropout_value,
     conv512, pool512 = dense_conv_block(16, pool256, n_convolutions_per_block*2, 
                                   inner_activation, kernel_value, batch_norm, 
                                   dropout_value)
+    
+    # Manage attention
+    if use_attention:
+        current_up_conv_block = up_conv_block_att
+    else:  
+        current_up_conv_block = up_conv_block
+    
     # x256 layers going up
-    deconv256 = up_conv_block(16, conv512, conv256, n_convolutions_per_block, 
-                              inner_activation, kernel_value, batch_norm, 
-                              dropout_value)
+    deconv256 = current_up_conv_block(16, conv512, conv256, n_convolutions_per_block, 
+                                      inner_activation, kernel_value, batch_norm, 
+                                      dropout_value)
     # x128 layers going up
-    deconv128 = up_conv_block(16, deconv256, conv128, 
-                              n_convolutions_per_block, inner_activation, 
-                              kernel_value, batch_norm, dropout_value)
+    deconv128 = current_up_conv_block(16, deconv256, conv128, n_convolutions_per_block, 
+                                      inner_activation, kernel_value, batch_norm, 
+                                      dropout_value)
     # x64 layers going up
-    deconv64 = up_conv_block(16, deconv128, conv64, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
+    deconv64 = current_up_conv_block(16, deconv128, conv64, n_convolutions_per_block, 
+                                     inner_activation, kernel_value, batch_norm, 
+                                     dropout_value)
     # x32 layers going up
-    deconv32 = up_conv_block(16, deconv64, conv32, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
+    deconv32 = current_up_conv_block(16, deconv64, conv32, n_convolutions_per_block, 
+                                     inner_activation, kernel_value, batch_norm, 
+                                     dropout_value)
 
     # Output
     convFIN = Conv3D(n_output_channels, 
@@ -460,15 +576,30 @@ def hdunet_3D(input_size, n_output_channels, dropout_value,
 
     model = Model(inputs = inputs, outputs = convFIN)
 
-    # Manage optimizer, add loss and metric(s)
+   # Manage optimizer
     if optim == 'adam':
-        model.compile(optimizer = Adam(lr = lr), loss = loss, 
-                      metrics = [loss])
+        optimizer = Adam(lr = lr)
     elif optim == 'rmsprop':
-        model.compile(optimizer = RMSprop(lr = lr), loss = loss, 
-                      metrics = [loss])
+        optimizer = RMSprop(lr = lr)
     else:
         raise NameError('Unknown optimizer.')
+    
+    # Manage dose score - TODO
+    if use_dose_score:
+        model.compile(optimizer = optimizer, 
+                      loss = custom_loss(inputs, [100, 1]), 
+                      metrics = [custom_loss(inputs, [100, 1])])
+        
+    # Consistency losses
+    elif use_consistency_losses:
+        model.compile(optimizer = optimizer, 
+                      loss = mse_closs, 
+                      metrics = [mse_closs])
+    
+    # Normal case
+    else:
+        model.compile(optimizer = optimizer, loss = loss, 
+                      metrics = [loss])
     
     model.summary()
 
@@ -610,6 +741,90 @@ def branch_unet_3D(input_size, n_output_channels, dropout_value,
                       loss = custom_loss, 
                       loss_weights = custom_loss_weights,
                       metrics = custom_loss)
+    else:
+        raise NameError('Unknown optimizer.')
+    
+    model.summary()
+
+    return model
+
+###############################################################################
+# BRANCH UNET
+def mono_branch_unet_3D(input_size, n_output_channels, dropout_value,
+                   n_convolutions_per_block, optim, lr, loss, final_activation,
+                   use_attention):
+    inputs = Input(input_size)
+
+    ###########################################################################
+    ## Architecture
+    ###########################################################################
+    
+    # x32 layers going down
+    conv32, pool32 = conv_block(32, inputs, n_convolutions_per_block, 
+                                inner_activation, kernel_value, batch_norm,
+                                dropout_value)
+    # x64 layers going down
+    conv64, pool64 = conv_block(64, pool32, n_convolutions_per_block, 
+                                inner_activation, kernel_value, batch_norm, 
+                                dropout_value)
+    # x128 layers going down
+    conv128, pool128 = conv_block(128, pool64, n_convolutions_per_block, 
+                                  inner_activation, kernel_value, batch_norm, 
+                                  dropout_value)
+    # x256 layers going down
+    conv256, pool256 = conv_block(256, pool128, n_convolutions_per_block, 
+                                  inner_activation, kernel_value, batch_norm, 
+                                  dropout_value)
+    # x512 layers (twice as many convolutions)
+    conv512, pool512 = conv_block(512, pool256, n_convolutions_per_block*2, 
+                                  inner_activation, kernel_value, batch_norm, 
+                                  dropout_value)
+    
+    # Manage attention
+    if use_attention:
+        current_up_conv_block = up_conv_block_att
+    else:  
+        current_up_conv_block = up_conv_block
+    
+    # BRANCH A
+    # - dose prediction
+    
+    # x256 layers going up
+    deconv256_dose = current_up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
+                              inner_activation, kernel_value, batch_norm, 
+                              dropout_value)
+    # x128 layers going up
+    deconv128_dose = current_up_conv_block(128, deconv256_dose, conv128, 
+                              n_convolutions_per_block, inner_activation, 
+                              kernel_value, batch_norm, dropout_value)
+    # x64 layers going up
+    deconv64_dose = current_up_conv_block(64, deconv128_dose, conv64, n_convolutions_per_block, 
+                             inner_activation, kernel_value, batch_norm, 
+                             dropout_value)
+    # x32 layers going up
+    deconv32_dose = current_up_conv_block(32, deconv64_dose, conv32, n_convolutions_per_block, 
+                             inner_activation, kernel_value, batch_norm, 
+                             dropout_value)
+
+    # Output
+    convFIN_dose = Conv3D(n_output_channels, 
+                          kernel_size = 1, 
+                          activation = final_activation)(deconv32_dose)
+
+    ###########################################################################
+    ## Model
+    ###########################################################################
+    model = Model(inputs = inputs, outputs = convFIN_dose)
+
+    # Manage optimizer, add loss and metric(s)
+    if optim == 'adam':
+        model.compile(optimizer = Adam(lr = lr), 
+                      loss = mse_closs,
+                      metrics = [mse_closs])
+    elif optim == 'rmsprop':
+        model.compile(optimizer = RMSprop(lr = lr), 
+                      loss = mse_closs,
+                      metrics = [mse_closs])
     else:
         raise NameError('Unknown optimizer.')
     

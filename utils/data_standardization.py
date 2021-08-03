@@ -18,6 +18,7 @@ def map_intervals(value, a, b, c, d):
 
 # Unapply min-max norm on rd value
 def unstandardize_rd(value):
+    value[value < 0] = 0.0
     value *= (rd_max_value - rd_min_value)
     value += rd_min_value
     return value
@@ -28,3 +29,15 @@ def standardize_rd(value):
     value -= rd_min_value
     value /= (rd_max_value - rd_min_value)
     return value
+
+# Unapply min-max norm on rd tensor
+def unstandardize_rd_tensor(value):
+    value *= (rd_max_value - rd_min_value)
+    value += rd_min_value
+    return value
+
+# Apply min-max norm on rd tensor
+def standardize_rd_tensor(tensor):
+    tensor -= rd_min_value
+    tensor /= (rd_max_value - rd_min_value)
+    return tensor

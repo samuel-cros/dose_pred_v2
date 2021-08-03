@@ -13,7 +13,7 @@ from keras.callbacks import ModelCheckpoint, Callback
 from keras.models import load_model
 import tensorflow as tf
 from keras.layers import *
-from unet_model_v2 import unet_3D, ablation_unet_3D, hdunet_3D #, load_pretrained_weights
+from unet_model_v2 import unet_3D, ablation_unet_3D, ablation_hdunet_3D, mono_branch_unet_3D #, load_pretrained_weights
 
 # IO
 import argparse
@@ -82,6 +82,8 @@ parser.add_argument('-use_attention', action='store_true',
                     help='Use the attention version of the U-Net')
 parser.add_argument('-use_shared_encoder', action='store_true', 
                     help='Use the shared-encoder version of the U-Net')
+parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true', 
+                    help='Use additional consistency losses')
 
 
 # TO REDO, make sure it's differentiable
@@ -96,7 +98,7 @@ args = parser.parse_args()
 ## Seeding
 from numpy.random import seed
 seed(args.seed)
-from tensorflow import set_random_seed
+from tensorflow.compat.v1 import set_random_seed
 set_random_seed(args.seed)
 
 # Manage folder for generated files
@@ -120,6 +122,9 @@ if args.use_shared_encoder:
 
 if args.use_dose_score:
     path_to_generated_files += '_dscore'
+    
+if args.use_consistency_losses:
+    path_to_generated_files += '_closs'
 
 Path(path_to_generated_files).mkdir(parents=True, exist_ok=True)
 
@@ -196,22 +201,19 @@ model = unet_3D(input_shape=input_shape,
 
 # Added support for additional architectures
 if args.use_hdunet:
-    model = hdunet_3D(input_shape, n_output_channels, args.dropout_value, 
+    model = ablation_hdunet_3D(input_shape, n_output_channels, args.dropout_value, 
                       n_convolutions, args.optim, args.lr, args.loss,
-                      args.final_activation)
-elif args.use_attention or args.use_dose_score:
-    model = ablation_unet_3D(input_shape, n_output_channels, args.dropout_value, 
-                             n_convolutions, args.optim, args.lr, args.loss,
-                             args.final_activation, args.use_attention, args.use_dose_score)
-
+                      args.final_activation, args.use_attention,
+                      use_consistency_losses)
 elif args.use_shared_encoder:
     model = branch_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
                              args.final_activation, args.use_attention)
 else:
-    model = unet_3D(input_shape, n_output_channels, args.dropout_value, 
-                    n_convolutions, args.optim, args.lr, args.loss,
-                    args.final_activation)
+    model = ablation_unet_3D(input_shape, n_output_channels, args.dropout_value, 
+                             n_convolutions, args.optim, args.lr, args.loss,
+                             args.final_activation, args.use_attention, 
+                             args.use_dose_score, args.use_consistency_losses)
 
 
 # Load pretrained model
