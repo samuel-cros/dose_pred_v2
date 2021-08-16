@@ -13,7 +13,7 @@ from keras.callbacks import ModelCheckpoint, Callback
 from keras.models import load_model
 import tensorflow as tf
 from keras.layers import *
-from unet_model_v2 import unet_3D, ablation_unet_3D, ablation_hdunet_3D, mono_branch_unet_3D #, load_pretrained_weights
+from unet_model_v2 import unet_3D, ablation_unet_3D, ablation_hdunet_3D #, load_pretrained_weights
 
 # IO
 import argparse
@@ -56,7 +56,7 @@ parser = argparse.ArgumentParser(description='Train a given model')
 # Arguments
 parser.add_argument('-path', '--path_to_main_folder', type=str, required=True,
                     help='Path to the output folder')
-parser.add_argument('-ids', '--path_to_ids', type=str, required=True,
+parser.add_argument('-ids', '--path_to_ids', type=str, required=False,
                     help='Path to the ids list (data_generation/ids_lists/XXX')
 parser.add_argument('-o', '--optim', type=str, required=True,
                     help='Optimizer')
@@ -84,6 +84,11 @@ parser.add_argument('-use_shared_encoder', action='store_true',
                     help='Use the shared-encoder version of the U-Net')
 parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true', 
                     help='Use additional consistency losses')
+parser.add_argument('-use_dvh_loss', action='store_true', 
+                    help='Use additional DVH loss')
+parser.add_argument('-dset', '--dataset', type=str, required=False,
+                    help='Two kinds of supported dataset: CHUM or OpenKBP')
+
 
 
 # TO REDO, make sure it's differentiable
@@ -92,7 +97,8 @@ parser.add_argument('-use_dose_score', action='store_true',
 
 # Additional defaults
 parser.set_defaults(augmentation=False, use_hdunet=False, use_attention=False,
-use_shared_encoder=False)
+                    use_consistency_losses=False, use_dvh_loss=False,
+                    use_shared_encoder=False, dataset='CHUM')
 args = parser.parse_args()
 
 ## Seeding
@@ -125,38 +131,66 @@ if args.use_dose_score:
     
 if args.use_consistency_losses:
     path_to_generated_files += '_closs'
+    
+path_to_generated_files += '_' + args.dataset
 
 Path(path_to_generated_files).mkdir(parents=True, exist_ok=True)
 
 ###############################################################################
-## Splitting
-###############################################################################
-# Load IDs
-IDs = np.load(args.path_to_ids) # Down to 149 patients
-
-# Debug
-#IDs = ['1230200' for i in range(30)]
-#print(IDs)
-#IDs = IDs[:6]
-
-# Split in train 70%, validation 15%, test 15%
-train_IDs, other_IDs = train_test_split(IDs, test_size=0.3)
-validation_IDs, test_IDs = train_test_split(other_IDs, test_size=0.5)
-
-# Save for testing
-np.save(os.path.join(path_to_generated_files, 'train_IDs'), train_IDs)
-np.save(os.path.join(path_to_generated_files, 'validation_IDs'), 
-                        validation_IDs)
-np.save(os.path.join(path_to_generated_files, "test_IDs"), test_IDs)
-
-###############################################################################
 ## Parameters
 ###############################################################################
-h5_dataset = h5py.File(os.path.join('..', 
+
+# CHUM init
+if args.dataset == 'CHUM':
+    
+    # Dataset
+    h5_dataset_training = h5py.File(os.path.join('..', 
                                     'data',
                                     'dataset_resized_rd_summed.h5'), 'r')
+    h5_dataset_validation = h5py.File(os.path.join('..', 
+                                    'data',
+                                    'dataset_resized_rd_summed.h5'), 'r')
+    n_input_channels= 21
+    
+    # Load IDs
+    IDs = np.load(args.path_to_ids) # Down to 149 patients
 
-n_input_channels= 21
+    # Debug
+    #IDs = ['1230200' for i in range(30)]
+    #print(IDs)
+    #IDs = IDs[:6]
+
+    # Split in train 70%, validation 15%, test 15%
+    train_IDs, other_IDs = train_test_split(IDs, test_size=0.3)
+    validation_IDs, test_IDs = train_test_split(other_IDs, test_size=0.5)
+
+    # Save for testing
+    np.save(os.path.join(path_to_generated_files, 'train_IDs'), train_IDs)
+    np.save(os.path.join(path_to_generated_files, 'validation_IDs'), 
+                            validation_IDs)
+    np.save(os.path.join(path_to_generated_files, "test_IDs"), test_IDs)
+    
+# OpenKBP init
+elif args.dataset == 'OpenKBP':
+    
+    # Dataset
+    h5_dataset_training = h5py.File(os.path.join('..', 
+                                    '..',
+                                    'shared',
+                                    'dataset_training'), 'r')
+    h5_dataset_validation = h5py.File(os.path.join('..', 
+                                    '..',
+                                    'shared',
+                                    'dataset_validation'), 'r')
+    n_input_channels= 11
+    
+    # Load IDs
+    train_IDs = list(h5_dataset_training.keys())
+    validation_IDs = list(h5_dataset_validation.keys())
+
+# Unknown dataset error
+else:
+    raise ValueError("Unknown dataset. Handled dataset are CHUM and OpenKBP")
 
 if args.use_shared_encoder:
     n_output_channels = 3
@@ -167,7 +201,8 @@ n_convolutions = 2 # per block
 
 training_params = {'patch_dim': (128, 128, None),
           'batch_size': 1,
-          'dataset': h5_dataset,
+          'dataset': h5_dataset_training,
+          'n_input_channels': n_input_channels,
           'n_output_channels': n_output_channels,
           'use_shared_encoder': args.use_shared_encoder,
           'shuffle': True,
@@ -175,7 +210,8 @@ training_params = {'patch_dim': (128, 128, None),
 
 validation_params = {'patch_dim': (128, 128, None),
           'batch_size': 1,
-          'dataset': h5_dataset,
+          'dataset': h5_dataset_validation,
+          'n_input_channels': n_input_channels,
           'n_output_channels': n_output_channels,
           'use_shared_encoder': args.use_shared_encoder,
           'shuffle': False,
@@ -203,8 +239,9 @@ model = unet_3D(input_shape=input_shape,
 if args.use_hdunet:
     model = ablation_hdunet_3D(input_shape, n_output_channels, args.dropout_value, 
                       n_convolutions, args.optim, args.lr, args.loss,
-                      args.final_activation, args.use_attention,
-                      use_consistency_losses)
+                      args.final_activation, args.dataset, args.use_attention, 
+                      args.use_dose_score, args.use_consistency_losses,
+                      args.use_dvh_loss)
 elif args.use_shared_encoder:
     model = branch_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
@@ -212,8 +249,9 @@ elif args.use_shared_encoder:
 else:
     model = ablation_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
-                             args.final_activation, args.use_attention, 
-                             args.use_dose_score, args.use_consistency_losses)
+                             args.final_activation, args.dataset, args.use_attention, 
+                             args.use_dose_score, args.use_consistency_losses,
+                             args.use_dvh_loss)
 
 
 # Load pretrained model

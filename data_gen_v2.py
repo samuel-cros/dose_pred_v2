@@ -21,12 +21,13 @@ class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(
         self, train_or_validation, list_IDs, patch_dim, batch_size, dataset, 
-        n_output_channels, use_shared_encoder, shuffle=True, augmentation=False):
+        n_input_channels, n_output_channels, use_shared_encoder, shuffle=True, 
+        augmentation=False):
         'Initialization'
         self.patch_dim = patch_dim
         self.batch_size = batch_size
         self.list_IDs = list_IDs
-        self.n_input_channels = 21
+        self.n_input_channels = n_input_channels
         self.n_output_channels = n_output_channels
         self.shuffle = shuffle
         self.augmentation = augmentation
@@ -69,7 +70,7 @@ class DataGenerator(keras.utils.Sequence):
         # Grab maximum height
         max_height = 0
         for ID in list_IDs_temp:
-            max_height = max(max_height, self.dataset[ID]['body'].shape[2])
+            max_height = max(max_height, self.dataset[ID]['dose'].shape[2])
         
         # Initialization
         X = np.empty((self.batch_size, 
