@@ -102,6 +102,23 @@ resize_factor = (0.25, 0.25, 0.25)
 # (- isodose = Isodose lines)
 # (- edges = ...)
 # - body (for sampling)
+# - prescribed_dose
+
+
+## Current
+# ID
+#   - input (128 * 128 * h * 21)
+#       - 0:CT | 1:PTV | 2:CTV | 3:GTV  | 4:OAR1 | ... | 20:OAR17
+#   - body (128 * 128 * h)
+#   - dose (128 * 128 * h)
+#   - prescribed_dose ()
+
+## What I need
+# ID
+#   - input (128 * 128 * h * nb_channels)
+#       - 0:CT | 1:PTV1 | 2:PTV2 | 3:PTV3  | 4:OAR1 | 5:OAR2 | ... 
+#   - dose (128 * 128 * h)
+
 
 # 38 average empty slices
 # 256 average height

@@ -52,7 +52,7 @@ for key in list(h5_file.keys()):
     '''
     
     # Add to the dataset
-    #'''
+    '''
     # Delete the entry if it already exists
     if key in h5_file.keys():
         if 'isodose' in h5_file[key].keys():
@@ -61,11 +61,26 @@ for key in list(h5_file.keys()):
     h5_file.create_dataset(key + '/isodose',
                            data=isodose,
                            compression='gzip')
-    #'''
+    '''
     
     # Manage edges
-    #edges = generic_gradient_magnitude(dose, sobel)
-    edges = abs(sobel(dose))
+    edges = generic_gradient_magnitude(dose, sobel)
+    
+    # Debug
+    # > trying to figure what each function does, how it behaves with
+    # 3D inputs
+    # > answer is: it does what we want, let's replicate it with tensors
+    # during loss computation
+    '''
+    edges_x = sobel(dose, 0)
+    edges_y = sobel(dose, 1)
+    edges_z = sobel(dose, 2)
+
+    mag = np.sqrt(edges_x**2 + edges_y**2 + edges_z**2)
+    
+    print(np.array_equal(edges, mag))
+    '''    
+    
     vmin = np.min(edges)
     vmax = np.max(edges)
     edges = map_intervals(edges, vmin, vmax, 0, 1)
@@ -81,6 +96,8 @@ for key in list(h5_file.keys()):
         plt.pause(0.0001)
         plt.draw()
     '''
+    
+    #sys.exit()
     
     # Add to the dataset
     #'''
