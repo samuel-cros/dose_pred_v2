@@ -8,7 +8,7 @@ from keras.optimizers import Adam, RMSprop
 from metrics import *
 from keras import backend as K
 from scipy.ndimage import sobel, generic_gradient_magnitude
-from keras.losses import mean_squared_error
+from tensorflow.losses import mean_squared_error
 import tensorflow as tf
 
 from utils.data_standardization import standardize_rd_tensor, unstandardize_rd_tensor
@@ -43,55 +43,7 @@ def get_biggest_tv(input_data):
                 return input_data[:, :, :, 3]
             else:
                 raise ValueError("Input should include at least one of " + \
-                    "the following: ptv 1, ctv 1 or gtv 1.")
-                
-# Dose score # TODO - differentiable?
-# Computes different metrics and gathers them into a score
-def dose_score(input_data, reference, prediction):
-    
-    # Design choice
-    # Here we are using the reference dose whereas at test time we use the
-    # ideal prescribed dose to the tumor.
-    # Our goal is to match the reference dose more than it is to match the
-    # ideal dose, since it can't physically be administered. It's a tradeoff,
-    # but only the reference plan gives us the deliverable aspect.
-    reference_tumor_gy = reference[get_biggest_tv(input_data[0]).nonzero()]
-    
-    # PTV Coverage D98, D95, D50, D5, D2
-    D98 = abs(ptv_coverage(prediction[0, :, : , :, 0], 
-                           reference_tumor_gy, 
-                           98))
-            
-    D95 = abs(ptv_coverage(prediction[0, :, : , :, 0], 
-                           reference_tumor_gy, 
-                           95))
-              
-    D50 = abs(ptv_coverage(prediction[0, :, : , :, 0], 
-                           reference_tumor_gy, 
-                           50))
-    
-    D5 = abs(ptv_coverage(prediction[0, :, : , :, 0], 
-                           reference_tumor_gy, 
-                           5))
-    
-    D2 = abs(ptv_coverage(prediction[0, :, : , :, 0], 
-                           reference_tumor_gy, 
-                           2))
-    
-    # Homogeneity 1, Homogeneity 2, Homogeneity 3
-    H1 = (D2 - D98) / D50
-    H2 = D95 / D5
-    H3 = max(prediction) / max(reference)
-    
-    # Score
-    return abs(1 - (D98 + D95 + D2 + (1 + H1) + H2 + H3) / 6)
-    
-# Custom loss
-def custom_loss(input_data, factors, reference, prediction):
-    
-    return (factors[0] * keras.losses.mean_squared_error(reference, prediction) + \
-            factors[1] * dose_score(input_data, reference, prediction))
-    
+                    "the following: ptv 1, ctv 1 or gtv 1.")    
     
 ## Consistency losses
 # > normalization / denormalization issue
@@ -123,8 +75,6 @@ def isodose_consistency_loss(dataset, y_true, y_pred):
 # Texture consistency loss
 @tf.function
 def texture_consistency_loss(y_true, y_pred):
-    
-    #y_true, y_pred = tf.reshape(y_true, [1, 128, 128, 128, 1]), tf.reshape(y_pred, [1, 128, 128, 128, 1])
     
     # Define sobel filters    
     sobel_x = tf.constant([[[-1,  0,  1], [-2,  0,  2], [-1,  0,  1]],
@@ -184,139 +134,101 @@ def texture_consistency_loss(y_true, y_pred):
 # MSE + Consistency losses encapsulator
 def mse_closs_encapsulated(dataset):
     
-    # MSE + Consistency losses
+    '''
+    # MSE + Consistency losses (Both2)
     def mse_closs(y_true, y_pred):
-        return (2* mean_squared_error(y_true, y_pred) + \
-                    1* isodose_consistency_loss(dataset, y_true, y_pred) + \
-                        1* texture_consistency_loss(y_true, y_pred)) / 4
+        return mean_squared_error(y_true, y_pred) + \
+                    0.1* isodose_consistency_loss(dataset, y_true, y_pred) + \
+                        0.01* texture_consistency_loss(y_true, y_pred)
+    '''
+                        
+    # MSE + Edges only (Edges3)
+    def mse_closs(y_true, y_pred):
+        return mean_squared_error(y_true, y_pred) + \
+                        0.001* texture_consistency_loss(y_true, y_pred)
         
     return mse_closs
 
 
 # --------------------------------------------------------------------------- #
 
+## DVH loss
+@tf.function
+def dvh_loss(input_data, dataset, y_true, y_pred):
+    
+    # Init
+    # Simplified shape
+    #x_y_z_shape = [y_pred.get_shape()[1].value, y_pred.get_shape()[2].value, y_pred.get_shape()[3].value]
+    
+    # For open-kbp and CHUM, the '0' channel is always a CT-scan
+    structures = input_data[0, :, :, :, 1:]
+    
+    # Max dose in Gy for the interval
+    max_dose = 80
+    
+    # Bin width, number of elements in the interval
+    # lower = more accurate, higher = faster
+    step = 1 # resp 10 for CHUM, inf for OpenKBP
+            
+    # Steepness parameter
+    # m = 1, local minima might be less defined, but gradients behave better
+    # for our optimization problem
+    m = 1
+    
+    #
+    result = 0.
+    
+    # Reshape and unstandardize
+    y_pred_unstandardized = unstandardize_rd_tensor(y_pred[0, :, :, :, 0], dataset)
+    y_true_unstandardized = unstandardize_rd_tensor(y_true[0, :, :, :, 0], dataset)
+    
+    # TODO, make it less heavy computation-wise
+    # result 128*128*h*s
+    # result_s = tf.expand_dims(sigmoid((y - dt)), -1) * structures_s
+    # column_y = tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_pred_unstandardized - dt)), -1))
+    # dvh_loss_final += tf.reduce_sum(column_y - column_y') / 
+    
+    sum_structures = tf.math.reduce_sum(structures, axis = [0, 1, 2])
+        
+    # For each d_value dt in [0, step, ..., max_dose]
+    for dt in range(0, max_dose+1, step):
+        
+        # Compute
+        # result_s = tf.expand_dims(sigmoid((y - dt)), -1) * structures_s
+        vs_dt_matrix_pred = tf.math.reduce_sum(tf.expand_dims(tf.math.sigmoid((m/step) * (y_pred_unstandardized - dt)), -1) * structures, axis = [0, 1, 2]) / tf.where(tf.equal(sum_structures, 0), tf.ones(tf.shape(sum_structures)), sum_structures)
+        vs_dt_matrix_true = tf.math.reduce_sum(tf.expand_dims(tf.math.sigmoid((m/step) * (y_true_unstandardized - dt)), -1) * structures, axis = [0, 1, 2]) / tf.where(tf.equal(sum_structures, 0), tf.ones(tf.shape(sum_structures)), sum_structures)
+        
+        # Compute
+        # Sum_s(Sum_t((vs_dt_true - vs_dt_pred)**2))
+        # or Sum_s(||DVH_s_true - DVH_s_pred||**2)
+        result += tf.math.reduce_sum((vs_dt_matrix_true - vs_dt_matrix_pred)**2)
+            
+
+    # Return
+    # [result / (n_s * n_t)]
+    return (result / (structures.get_shape()[-1].value * ((max_dose + 1) / step)))
+
+
 # DVH Loss encapsulator
 def mse_dvh_loss_encapsulated(input_data, dataset):
     
-    # MSE + DVH Loss
-    @tf.function
     def mse_dvh_loss(y_true, y_pred):
-        
-        # Init
-        # Simplified shape
-        #x_y_z_shape = [y_pred.get_shape()[1].value, y_pred.get_shape()[2].value, y_pred.get_shape()[3].value]
-        
-        # For open-kbp and CHUM, the '0' channel is always a CT-scan
-        structures = input_data[0, :, :, :, 1:]
-        
-        # Max dose in Gy for the interval
-        max_dose = 80
-        
-        # Bin width, number of elements in the interval
-        # lower = more accurate, higher = faster
-        step = 1
-        
-        # Steepness parameter
-        # m = 1, local minima might be less defined, but gradients behave better
-        # for our optimization problem
-        m = 1
-        
-        #
-        result = 0.
-        
-        # Reshape and unstandardize
-        y_pred_unstandardized = unstandardize_rd_tensor(y_pred[0, :, :, :, 0], dataset)
-        y_true_unstandardized = unstandardize_rd_tensor(y_true[0, :, :, :, 0], dataset)
-        
-        # TODO, make it less heavy computation-wise
-        # result 128*128*h*s
-        # result_s = tf.expand_dims(sigmoid((y - dt)), -1) * structures_s
-        # column_y = tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_pred_unstandardized - dt)), -1))
-        # dvh_loss_final += tf.reduce_sum(column_y - column_y') / 
-
-        for i in range (structures.get_shape()[-1].value):
-
-            # Init structure mask and sum
-            structure_mask = structures[:, :, :, i]
-            sum_struct_mask = tf.math.reduce_sum(structure_mask)
-            
-            # For each d_value dt in [0, step, ..., max_dose]
-            for dt in range(0, max_dose+1, step):
-                vs_dt_pred = tf.math.reduce_sum(tf.math.multiply(tf.math.sigmoid((m/step) * (y_pred_unstandardized - dt)), structure_mask)) / tf.math.maximum(sum_struct_mask, 1) # Some patients lack some segmentations
-                vs_dt_true = tf.math.reduce_sum(tf.math.multiply(tf.math.sigmoid((m/step) * (y_true_unstandardized - dt)), structure_mask)) / tf.math.maximum(sum_struct_mask, 1)
-                
-                # Compute
-                # Sum_s(Sum_t((vs_dt_true - vs_dt_pred)**2))
-                # or Sum_s(||DVH_s_true - DVH_s_pred||**2)
-                result += (vs_dt_true - vs_dt_pred)**2
-                
-
-        # Return
-        # [result / (n_s * n_t)]
-        return 0.1 * (result / (structures.get_shape()[-1].value * ((max_dose + 1) / step))) + \
-                    mean_squared_error(y_true, y_pred)
-                    
-    return mse_dvh_loss
-
-
-
-# TODO, make it less heavy computation-wise
-# result 128*128*h*s
-# result_s = tf.expand_dims(sigmoid((y - dt)), -1) * structures_s
-# column_y = tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_pred_unstandardized - dt)), -1))
-# dvh_loss_final += tf.reduce_sum(column_y - column_y') / 
-
-# Better in terms of seconds per batch, but crashes the RAM <----------
-
-# DVH Loss encapsulator
-def mse_dvh_loss_encapsulated1(input_data, dataset):
+        return mean_squared_error(y_true, y_pred) + \
+                0.1 * dvh_loss(input_data, dataset, y_true, y_pred)
     
-    # MSE + DVH Loss
-    @tf.function
-    def mse_dvh_loss(y_true, y_pred):
-        
-        # Init
-        # Simplified shape
-        #x_y_z_shape = [y_pred.get_shape()[1].value, y_pred.get_shape()[2].value, y_pred.get_shape()[3].value]
-        
-        # For open-kbp and CHUM, the '0' channel is always a CT-scan
-        structures = input_data[0, :, :, :, 1:]
-        
-        # Max dose in Gy for the interval
-        max_dose = 80
-        
-        # Bin width, number of elements in the interval
-        # lower = more accurate, higher = faster
-        step = 1
-        
-        # Steepness parameter
-        # m = 1, local minima might be less defined, but gradients behave better
-        # for our optimization problem
-        m = 1
-        
-        #
-        result = 0.
-        
-        # Reshape and unstandardize
-        y_pred_unstandardized = unstandardize_rd_tensor(y_pred[0, :, :, :, 0], dataset)
-        y_true_unstandardized = unstandardize_rd_tensor(y_true[0, :, :, :, 0], dataset)
-        
-        # For each d_value dt in [0, step, ..., max_dose]
-        for dt in range(0, max_dose+1, step):
-            
-            sum_struct = tf.math.reduce_sum(structures, [0, 1, 2])
-            #column_y_pred = tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_pred_unstandardized - dt)), -1)) / tf.where(tf.equal(sum_struct, 0), tf.ones(tf.shape(sum_struct)), sum_struct)
-            #column_y_true = tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_true_unstandardized - dt)), -1)) / tf.where(tf.equal(sum_struct, 0), tf.ones(tf.shape(sum_struct)), sum_struct)
-            #result += tf.math.reduce_sum((column_y_true - column_y_pred)**2)  
-            
-            result += tf.math.reduce_sum((tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_true_unstandardized - dt)), -1)) / tf.where(tf.equal(sum_struct, 0), tf.ones(tf.shape(sum_struct)), sum_struct) - tf.multiply(structures, tf.expand_dims(tf.math.sigmoid((y_pred_unstandardized - dt)), -1)) / tf.where(tf.equal(sum_struct, 0), tf.ones(tf.shape(sum_struct)), sum_struct))**2)
-
-        # Return
-        # [result / (n_s * n_t)]
-        return 0.1 * (result / (structures.get_shape()[-1].value * ((max_dose + 1) / step))) + \
-                    mean_squared_error(y_true, y_pred)
-                    
     return mse_dvh_loss
+
+# --------------------------------------------------------------------------- #
+
+## DVH + C-Loss encapsulator
+def mse_dvh_closs_encapsulated(input_data, dataset):
+    
+    def mse_dvh_closs(y_true, y_pred):
+        return mean_squared_error(y_true, y_pred) + \
+                0.1 * dvh_loss(input_data, dataset, y_true, y_pred) + \
+                    0.001 * texture_consistency_loss(y_true, y_pred)
+    
+    return mse_dvh_closs
 
 # --------------------------------------------------------------------------- #
 
@@ -553,8 +465,8 @@ def unet_3D(input_size, n_output_channels, dropout_value,
 # UNET
 def ablation_unet_3D(input_size, n_output_channels, dropout_value,
                      n_convolutions_per_block, optim, lr, loss, 
-                     final_activation, dataset, use_attention, use_dose_score,
-                     use_consistency_losses, use_dvh_loss):
+                     final_activation, dataset, use_attention,
+                     use_consistency_losses, use_dvh_loss, use_dvh_closs):
     inputs = Input(input_size)
 
     ###########################################################################
@@ -623,15 +535,9 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
         optimizer = RMSprop(lr = lr)
     else:
         raise NameError('Unknown optimizer.')
-    
-    # Manage dose score - TODO
-    if use_dose_score:
-        model.compile(optimizer = optimizer, 
-                      loss = custom_loss(inputs, [100, 1]), 
-                      metrics = [custom_loss(inputs, [100, 1])])
         
     # Consistency losses
-    elif use_consistency_losses:
+    if use_consistency_losses:
         model.compile(optimizer = optimizer, 
                       loss = mse_closs_encapsulated(dataset), 
                       metrics = [mse_closs_encapsulated(dataset)])
@@ -642,6 +548,11 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
                       loss = mse_dvh_loss_encapsulated(inputs, dataset), 
                       metrics = [mse_dvh_loss_encapsulated(inputs, dataset)])
         
+    # DVH C-Loss
+    elif use_dvh_closs:
+        mode.compile(optimizer = optimizer,
+                     loss = mse_dvh_closs_encapsulated(inputs, dataset),
+                     metrics = [mse_dvh_closs_encapsulated(inputs, dataset)])
     
     # Normal case
     else:
@@ -656,7 +567,8 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
 # HD-UNET
 def ablation_hdunet_3D(input_size, n_output_channels, dropout_value, 
             n_convolutions_per_block, optim, lr, loss, final_activation, dataset, 
-            use_attention, use_dose_score, use_consistency_losses, use_dvh_loss):
+            use_attention, use_consistency_losses, use_dvh_loss,
+            use_dvh_closs):
     
     inputs = Input(input_size)
     
@@ -724,15 +636,9 @@ def ablation_hdunet_3D(input_size, n_output_channels, dropout_value,
         optimizer = RMSprop(lr = lr)
     else:
         raise NameError('Unknown optimizer.')
-    
-    # Manage dose score - TODO
-    if use_dose_score:
-        model.compile(optimizer = optimizer, 
-                      loss = custom_loss(inputs, [100, 1]), 
-                      metrics = [custom_loss(inputs, [100, 1])])
         
     # Consistency losses
-    elif use_consistency_losses:
+    if use_consistency_losses:
         model.compile(optimizer = optimizer, 
                       loss = mse_closs_encapsulated(dataset), 
                       metrics = [mse_closs_encapsulated(dataset)])
@@ -742,6 +648,12 @@ def ablation_hdunet_3D(input_size, n_output_channels, dropout_value,
         model.compile(optimizer = optimizer, 
                       loss = mse_dvh_loss_encapsulated(inputs, dataset), 
                       metrics = [mse_dvh_loss_encapsulated(inputs, dataset)])
+        
+    # DVH C-Loss
+    elif use_dvh_closs:
+        mode.compile(optimizer = optimizer,
+                     loss = mse_dvh_closs_encapsulated(inputs, dataset),
+                     metrics = [mse_dvh_closs_encapsulated(inputs, dataset)])
     
     # Normal case
     else:

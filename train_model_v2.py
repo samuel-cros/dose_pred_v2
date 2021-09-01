@@ -65,10 +65,6 @@ parser.add_argument('-drop', '--dropout_value', type=float, required=True,
                     help='Dropout')
 parser.add_argument('-e', '--n_epochs', type=int, required=True,
                     help='Number of epochs')
-#parser.add_argument('-aug', '--augmentation', dest='augmentation',
-#                    action='store_true', help='Use data augmentation')
-#parser.add_argument('-no-aug', '--no-augmentation', dest='augmentation',
-#                    action='store_false', help="Don't use data augmentation")
 parser.add_argument('-seed', type=int, required=True, help='Random seeding')
 parser.add_argument('-w', '--initial_weights', type=str,
                     help='Path to the initial weights')
@@ -86,19 +82,15 @@ parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true
                     help='Use additional consistency losses')
 parser.add_argument('-use_dvh_loss', action='store_true', 
                     help='Use additional DVH loss')
+parser.add_argument('-use_dvh_closs', action='store_true', 
+                    help='Use additional DVH-CLoss loss')
 parser.add_argument('-dset', '--dataset', type=str, required=False,
                     help='Two kinds of supported dataset: CHUM or OpenKBP')
 
-
-
-# TO REDO, make sure it's differentiable
-parser.add_argument('-use_dose_score', action='store_true', 
-                    help='Use the dose score as a metric for U-Net')
-
 # Additional defaults
 parser.set_defaults(augmentation=False, use_hdunet=False, use_attention=False,
-                    use_consistency_losses=False, use_dvh_loss=False,
-                    use_shared_encoder=False, dataset='CHUM')
+                    use_consistency_losses=False, use_dvh_loss=False, use_closs=False,
+                    use_shared_encoder=False, use_dvh_closs=False)
 args = parser.parse_args()
 
 ## Seeding
@@ -116,21 +108,6 @@ path_to_generated_files = os.path.join(args.path_to_main_folder, 'dr_' + \
 
 if args.initial_weights is not None:
     path_to_generated_files += '_transfer'
-
-if args.use_hdunet:
-    path_to_generated_files += '_hd'
-    
-if args.use_attention:
-    path_to_generated_files += '_att'
-
-if args.use_shared_encoder:
-    path_to_generated_files += '_shared_encoder'
-
-if args.use_dose_score:
-    path_to_generated_files += '_dscore'
-    
-if args.use_consistency_losses:
-    path_to_generated_files += '_closs'
     
 path_to_generated_files += '_' + args.dataset
 
@@ -174,10 +151,12 @@ if args.dataset == 'CHUM':
 elif args.dataset == 'OpenKBP':
     
     # Dataset
+    # stick with training and not training2 at this point, we don't want to create uncertainty about the final results
     h5_dataset_training = h5py.File(os.path.join('..', 
                                     '..',
                                     'shared',
-                                    'dataset_training'), 'r')
+                                    'dataset_training'), 'r') 
+    
     h5_dataset_validation = h5py.File(os.path.join('..', 
                                     '..',
                                     'shared',
@@ -227,21 +206,14 @@ input_shape = (training_params['patch_dim'][0],
                training_params['patch_dim'][1],
                training_params['patch_dim'][2], 
                n_input_channels)
-'''
-model = unet_3D(input_shape=input_shape, 
-                number_of_pooling=args.number_of_pooling, 
-                dropout=args.dropout_value, 
-                optim=args.optim, 
-                lr=args.lr)
-'''
 
 # Added support for additional architectures
 if args.use_hdunet:
     model = ablation_hdunet_3D(input_shape, n_output_channels, args.dropout_value, 
                       n_convolutions, args.optim, args.lr, args.loss,
-                      args.final_activation, args.dataset, args.use_attention, 
-                      args.use_dose_score, args.use_consistency_losses,
-                      args.use_dvh_loss)
+                      args.final_activation, args.dataset, args.use_attention,
+                      args.use_consistency_losses, args.use_dvh_loss, 
+                      args.use_dvh_closs)
 elif args.use_shared_encoder:
     model = branch_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
@@ -249,9 +221,9 @@ elif args.use_shared_encoder:
 else:
     model = ablation_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
-                             args.final_activation, args.dataset, args.use_attention, 
-                             args.use_dose_score, args.use_consistency_losses,
-                             args.use_dvh_loss)
+                             args.final_activation, args.dataset, args.use_attention,
+                             args.use_consistency_losses, args.use_dvh_loss,
+                             args.use_dvh_closs)
 
 
 # Load pretrained model
@@ -264,9 +236,7 @@ mc_validation_loss = ModelCheckpoint(os.path.join(path_to_generated_files,
                         monitor='val_' + args.loss, mode='min', 
                         save_best_only=True, verbose=1)
 
-mc_epoch = CustomSaver(path_to_generated_files)
-
-callbacks = [mc_epoch, mc_validation_loss]
+callbacks = [mc_validation_loss]
 
 ###############################################
 ## Training

@@ -9,7 +9,7 @@ from utils.data_standardization import unstandardize_rd, map_intervals
 import keras
 from metrics import *
 from utils.data_standardization import unstandardize_rd
-from unet_model_v2 import mse_closs_encapsulated, mse_dvh_loss_encapsulated
+from unet_model_v2 import mse_closs_encapsulated, mse_dvh_loss_encapsulated, mse_dvh_closs_encapsulated
 import tensorflow as tf
 
 # IO
@@ -169,7 +169,7 @@ parser.add_argument('-path', '--path_to_model_folder', type=str,
                     required=True, help='Path to the model folder')
 parser.add_argument('-mname', '--model_name', type=str, required=True,
                     help='Name of the model')
-parser.add_argument('-dset', '--dataset', type=str, required=False,
+parser.add_argument('-dset', '--dataset', type=str, required=True,
                     help='Two kinds of supported dataset: CHUM or OpenKBP')
 parser.add_argument('-set', '--kind_of_set', type=str, required=True)
 parser.add_argument('-ids', '--list_of_ids', nargs='+', type=str, 
@@ -178,10 +178,13 @@ parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true
                     help='Use additional consistency losses')
 parser.add_argument('-use_dvh_loss', action='store_true', 
                     help='Use additional DVH losses')
+parser.add_argument('-use_dvh_closs', action='store_true', 
+                    help='Use additional DVH-CLoss loss')
 
 # Additional defaults
 parser.set_defaults(use_ct=False, use_gy=False, use_smaller_intervals=False,
-                    use_consistency_losses=False)
+                    use_consistency_losses=False, use_dvh_loss=False, 
+                    use_dvh_closs=False)
 args = parser.parse_args()
 
 ###############################################################################
@@ -220,18 +223,18 @@ elif args.dataset == 'OpenKBP':
         dataset = h5py.File(os.path.join('..', 
                                         '..', 
                                         'shared',
-                                        'dataset_training'), 'r')
+                                        'dataset_training2'), 'r')
     elif args.kind_of_set == 'validation':
         dataset = h5py.File(os.path.join('..', 
                                         '..', 
                                         'shared',
-                                        'dataset_validation'), 'r')
+                                        'dataset_validation2'), 'r')
         
     elif args.kind_of_set == 'test':
         dataset = h5py.File(os.path.join('..', 
                                         '..', 
                                         'shared',
-                                        'dataset_test'), 'r')
+                                        'dataset_test2'), 'r')
         
     else:
         raise ValueError("Unknown kind of set. Handled sets are train, validation or test")
@@ -261,6 +264,10 @@ if args.test_mode == 'generate_predictions':
         model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
                                                     args.model_name),
                                         custom_objects={'mse_dvh_loss': mse_dvh_loss_encapsulated(tf.zeros((1, 128, 128, 128, 21)), args.dataset)})
+    elif args.use_dvh_closs:
+        model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
+                                                    args.model_name),
+                                        custom_objects={'mse_dvh_closs': mse_dvh_closs_encapsulated(tf.zeros((1, 128, 128, 128, 21)), args.dataset)})
     else:
         model = keras.models.load_model(os.path.join(args.path_to_model_folder, 
                                                     args.model_name))
@@ -807,13 +814,13 @@ elif args.test_mode == 'evaluate_predictions_rf':
     
 ###############################################################################
 ###############################################################################
-# EVALUATE PREDICTIONS
+# EVALUATE PREDICTIONS FINAL
 ###############################################################################
 ###############################################################################
 # - predictions need to be generated prior to running this code
 # - generates a csv file with the evaluation results associated with the
 # given predictions (path to a folder)
-elif args.test_mode == 'evaluate_predictions':
+elif args.test_mode == 'evaluate_predictions_final':
     
     ###########################################################################
     # Setup
@@ -1013,6 +1020,262 @@ elif args.test_mode == 'evaluate_predictions':
                 average_row['Dmean_pe ' + channel_to_mask(channel, args.dataset)] += row['Dmean_pe ' + channel_to_mask(channel, args.dataset)]
                 count_structures['Dmean_pe ' + channel_to_mask(channel, args.dataset)] += 1 
                        
+        
+        # Write row
+        metrics_pred_writer.writerow(row)   
+        
+    ###########################################################################
+    # Compute average across patients
+    ###########################################################################
+    for field in average_row:
+        # Special treatment for structure max and mean dose since there is a chance
+        # to be lacking the segmentation
+        if field in dmax_structure_fields + dmean_structure_fields:
+            average_row[field] /= max(count_structures[field], 1)
+        else:
+            average_row[field] /= len(list_of_predictions)
+        
+    average_row['ID'] = 'Average'
+    metrics_pred_writer.writerow(average_row)
+
+    ###########################################################################
+    # Cleanup
+    ###########################################################################  
+    metrics_pred_csv.close()
+    
+###############################################################################
+###############################################################################
+# EVALUATE PREDICTIONS
+###############################################################################
+###############################################################################
+# - predictions need to be generated prior to running this code
+# - generates a csv file with the evaluation results associated with the
+# given predictions (path to a folder)
+elif args.test_mode == 'evaluate_predictions':
+    
+    ###########################################################################
+    # Setup
+    ###########################################################################
+    # Setup paths
+    path_to_predicted_volumes = \
+        os.path.join(path_to_results, 
+                     'predicted_volumes_generate_predictions',)
+    Path(path_to_predicted_volumes).mkdir(parents=True, exist_ok=True)
+    
+    # Setup CSV
+    metrics_pred_csv = open(os.path.join(path_to_predicted_volumes, 
+                                         'metrics_pred_last.csv'), 
+                            'w',
+                            newline='')
+    
+    if args.dataset == 'CHUM':
+        n_input_channels = 21
+    elif args.dataset == 'OpenKBP':
+        n_input_channels = 11
+    else:
+        raise ValueError("Unknown dataset. Handled datasets are CHUM and OpenKBP")
+
+    dmax_structure_fields = ['Dmax pe ' + channel_to_mask(i, args.dataset) for i in range(1, n_input_channels)]
+    dmean_structure_fields = ['Dmean pe ' + channel_to_mask(i, args.dataset) for i in range(1, n_input_channels)]
+    fields = ['ID'] + \
+             ['D99 pe', 'D98 pe', 'D95 pe', 'Dmax pe', 'HI', 'H2'] + \
+             ['D99', 'D98', 'D95', 'Dmax', 'CI', "van't Riet", 'R50'] + \
+             ['Dose score', 'DVH score'] + \
+             dmax_structure_fields + dmean_structure_fields
+    metrics_pred_writer = csv.DictWriter(metrics_pred_csv, fieldnames=fields)
+    metrics_pred_writer.writeheader()
+    
+    # Init average row
+    average_row = {}
+    for field_name in fields:
+        average_row[field_name] = 0
+    
+    # Count the number of structures so we can compute the average
+    # on the right number of patients (some patients lack segmentations)
+    count_structures = {}
+    for s_field_name in dmax_structure_fields + dmean_structure_fields:
+        count_structures[s_field_name] = 0
+    
+    # Go through the predictions
+    list_of_predictions = os.listdir(path_to_predicted_volumes)
+    if 'metrics_pred.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred.csv')
+    if 'metrics_pred_rf.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_rf.csv')
+    if 'metrics_pred_final.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_final.csv')
+    if 'metrics_pred_last.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_last.csv')
+
+    # Remove troubling cases
+    if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
+    if '668957.npz' in list_of_predictions: list_of_predictions.remove('668957.npz')
+    if '7021217.npz' in list_of_predictions: list_of_predictions.remove('7021217.npz')
+    if '5010908.npz' in list_of_predictions: list_of_predictions.remove('5010908.npz')
+    if 'pt_220.npz' in list_of_predictions: list_of_predictions.remove('pt_220.npz')
+    
+    #list_IDs.remove('5447536')
+    #list_of_predictions = ['2170598.npz', '171272.npz']
+    
+    ###########################################################################
+    # Main
+    ###########################################################################
+    for file in list_of_predictions:
+    
+        # Compute the metrics
+        
+        # Setup
+        id = file.split('.npz')[0]
+        print(id)
+        row = {}
+        row['ID'] = id
+        
+        try:
+            plan = \
+                    unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                        file))['arr_0'][:, :, :, 0],
+                                    args.dataset)
+        except IndexError:
+            plan = \
+                    unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
+                                                        file))['arr_0'][:, :, :],
+                                    args.dataset)
+                
+        ref_plan = unstandardize_rd(dataset[id]['dose'][()], args.dataset)
+
+        '''
+        plt.imshow(plan[:, :, 30], cmap='jet', vmin=0, vmax=80)
+        plt.show()
+
+        sys.exit()
+        '''
+
+        tumor_segmentation_bin, prescribed_dose = get_biggest_tv(dataset[id]['input'], args.dataset)
+        
+        if args.dataset == 'CHUM':
+            prescribed_dose = dataset[id]['prescribed_dose'][()]/100
+            dose_score_mask = dataset[id]['body'][()]
+            tv_channels = dataset[id]['input'][:, :, :, 1:4]
+            oar_channels = dataset[id]['input'][:, :, :, 4:20] # excluding the optic nerve, too small for this metric
+            voxel_size = (1.,1.,1.)
+        elif args.dataset == 'OpenKBP':
+            dose_score_mask = dataset[id]['pdm'][()]
+            #dose_score_mask = np.where(ref_plan > 0., 1., 0.) # TEMPORAIRE TODO
+            tv_channels = dataset[id]['input'][:, :, :, 8:11]
+            oar_channels = dataset[id]['input'][:, :, :, 1:8]
+            voxel_size = dataset[id]['vox_dim'][()]
+        tumor_segmentation_gy = tumor_segmentation_bin * prescribed_dose
+        
+        #######################################################################
+        # PTV coverage (DXX) - Percent error
+        #######################################################################        
+        # D99
+        coverage_value = 99
+        row['D99 pe'] = ptv_coverage_absolute_percent_error(plan, ref_plan, tumor_segmentation_bin, coverage_value, prescribed_dose)
+        average_row['D99 pe'] += row['D99 pe']
+        
+        # D98
+        coverage_value = 98
+        row['D98 pe'] = ptv_coverage_absolute_percent_error(plan, ref_plan, tumor_segmentation_bin, coverage_value, prescribed_dose)
+        average_row['D98 pe'] += row['D98 pe']
+
+        # D95
+        coverage_value = 95
+        row['D95 pe'] = ptv_coverage_absolute_percent_error(plan, ref_plan, tumor_segmentation_bin, coverage_value, prescribed_dose)
+        average_row['D95 pe'] += row['D95 pe'] 
+        
+        #######################################################################
+        # Dmax - Percent error
+        #######################################################################
+        # Dmax pe
+        row['Dmax pe'] = dmax_absolute_error(prescribed_dose, plan, ref_plan)
+        average_row['Dmax pe'] += row['Dmax pe']
+        
+        #######################################################################
+        # Homogeneity 1 (Homogeneity)
+        #######################################################################
+        row['HI'] = homogeneity_1(plan, tumor_segmentation_gy)
+        average_row['HI'] += row['HI']
+
+        #######################################################################
+        # Homogeneity 2 (Dose homogeneity index DHI)
+        #######################################################################
+        row['H2'] = homogeneity_2(plan, tumor_segmentation_gy)
+        average_row['H2'] += row['H2']  
+            
+        #######################################################################
+        # PTV coverage (DXX)
+        #######################################################################        
+        # D99
+        coverage_value = 99
+        row['D99'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value, prescribed_dose)
+        average_row['D99'] += row['D99']
+        
+        # D98
+        coverage_value = 98
+        row['D98'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value, prescribed_dose)
+        average_row['D98'] += row['D98']
+
+        # D95
+        coverage_value = 95
+        row['D95'] = ptv_coverage(plan, tumor_segmentation_gy, coverage_value, prescribed_dose)
+        average_row['D95'] += row['D95']    
+        
+        #######################################################################
+        # Dmax (whole plan)
+        #######################################################################
+        row['Dmax'] = max_dose_error_vs_prescribed(prescribed_dose, plan)
+        average_row['Dmax'] += row['Dmax']    
+        
+        #######################################################################
+        # Conformity index CI
+        #######################################################################
+        row['CI'] = conformity_index(plan, tumor_segmentation_gy, prescribed_dose)
+        average_row['CI'] += row['CI']
+        
+        ###############################################################################
+        # van't Riet conformation number
+        ###############################################################################
+        row["van't Riet"] = vant_riet(plan, tumor_segmentation_gy, prescribed_dose)
+        average_row["van't Riet"] += row["van't Riet"]
+        
+        ###############################################################################
+        # Dose spillage (R50)
+        ###############################################################################
+        row['R50'] = dose_spillage(plan, tumor_segmentation_bin, prescribed_dose)
+        average_row['R50'] += row['R50']
+        
+        ###############################################################################
+        # Dose score
+        ###############################################################################
+        row['Dose score'] = dose_score(plan, ref_plan, dose_score_mask)
+        average_row['Dose score'] += row['Dose score']
+        
+        ###############################################################################
+        # DVH score
+        ###############################################################################
+        row['DVH score'] = dvh_score(plan, ref_plan, oar_channels, tv_channels, voxel_size)
+        average_row['DVH score'] += row['DVH score']
+            
+        
+        # Go along the masks stored between input[1] and input[20 or 10]
+        # as 0 is for the CT
+        for channel in range(1, dataset[id]['input'].shape[-1]):
+            
+            # if the mask is not empty
+            if dataset[id]['input'][:, :, :, channel].any():
+                
+                structure_segmentation = dataset[id]['input'][:, :, :, channel][()]
+                
+                ###############################################################
+                # Dmax pe per structure
+                ###############################################################
+                row['Dmax pe ' + channel_to_mask(channel, args.dataset)] = dmax_structure_absolute_error(prescribed_dose, plan, ref_plan, structure_segmentation)
+                average_row['Dmax pe ' + channel_to_mask(channel, args.dataset)] += row['Dmax pe ' + channel_to_mask(channel, args.dataset)]
+                count_structures['Dmax pe ' + channel_to_mask(channel, args.dataset)] += 1 
+                
+                ###############################################################
+                # Dmean pe per structure
+                ###############################################################
+                row['Dmean pe ' + channel_to_mask(channel, args.dataset)] = dmean_structure_absolute_error(prescribed_dose, plan, ref_plan, structure_segmentation)
+                average_row['Dmean pe ' + channel_to_mask(channel, args.dataset)] += row['Dmean pe ' + channel_to_mask(channel, args.dataset)]
+                count_structures['Dmean pe ' + channel_to_mask(channel, args.dataset)] += 1 
         
         # Write row
         metrics_pred_writer.writerow(row)   

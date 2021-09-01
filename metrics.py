@@ -18,66 +18,47 @@ from keras.losses import mean_absolute_error as mae
 # PTV Coverage (DXX) - Absolute percent error (between predicted and ref normalized with 
 # the prescribed dose) ~ 0 to 5%
 ###############################################################################
-def ptv_coverage_absolute_percent_error(plan, ref_plan, tumor_segmentation_bin, coverage_value, prescribed_dose):
+# - prediction
+# - reference
+# - mask
+# - coverage value
+# - prescribed value
+# returns DXX percent error (|DXX_ref - DXX_pred| / prescribed_value)
+def ptv_coverage_absolute_percent_error(prediction, reference, mask, coverage_value, prescribed_value):
+
+    # Mask along the given entry
+    masked_pred = prediction.flatten()[(mask.flatten()).astype(bool)]
+    masked_ref = reference.flatten()[(mask.flatten()).astype(bool)]
     
-    ## Get non-zero indices from tumor_seg
-    non_zero = tumor_segmentation_bin.nonzero()
-    
-    ## For each voxel i in the plan where the tumor is
-    # Compute abs(value_i - ref_i) / prescribed_i
-    per_voxel_coverage = (abs(plan[non_zero] - ref_plan[non_zero]) / prescribed_dose) * 100
-    # Descending sort
-    per_voxel_coverage[::-1].sort()
-        
-    # Compute how many voxels to take
-    coverage_index = \
-        math.floor(len(per_voxel_coverage) * coverage_value / 100)
-    # Average the corresponding number of voxels    
-    average_coverage = \
-        np.sum(per_voxel_coverage[:coverage_index]) / coverage_index
-        
-    # Return average coverage on coverage_value% of the tumor
-    return average_coverage
+    # Return DXX percent error (|DXX_ref - DXX_pred| / prescribed_value)
+    return (np.abs(np.percentile(masked_ref, 100-coverage_value) - \
+            np.percentile(masked_pred, 100-coverage_value)) / prescribed_value) * 100
 
 ###############################################################################
 # Max dose error whole plan against prescribed (Dmax)
 ###############################################################################
-# - prescribed_dose
+# - prescribed_value
 # - predicted_plan
 # - reference_plan
-def dmax_absolute_error(prescribed_dose, predicted_plan, reference_plan):
+def dmax_absolute_error(prescribed_value, prediction, reference):
     
-    return (abs(np.max(predicted_plan) - np.max(reference_plan)) / prescribed_dose) * 100
+    return (abs(np.max(prediction) - np.max(reference)) / prescribed_value) * 100
 
 ###############################################################################
 # Homogeneity 1 (Homogeneity index HI) ~ 0
 ###############################################################################
-# - plan: 3D radiation plan
-# - tumor_segmentation_gy: 3D volume where 0->void, Gy->tumor
+# - prediction
+# - mask
 # returns homogeneity 1 = (D2 - D98) / D50
-def homogeneity_1(plan, tumor_segmentation_gy):
+def homogeneity_1(prediction, mask):
     
-    ## Get non-zero indices from tumor_seg
-    non_zero = tumor_segmentation_gy.nonzero()
+    # Mask along the given entry
+    masked_pred = prediction.flatten()[(mask.flatten()).astype(bool)]
     
-    ## For each voxel i in the plan where the tumor is
-    # Compute value_i / prescribed_i
-    per_voxel_coverage = plan[non_zero] / tumor_segmentation_gy[non_zero]
-    # Descending sort
-    per_voxel_coverage[::-1].sort()
-    
-    # Compute how many voxels to take
-    # 2%
-    index_D2 = math.floor(len(per_voxel_coverage) * 2 / 100)
-    # 98%
-    index_D98 = math.floor(len(per_voxel_coverage) * 98 / 100)
-    # 50%
-    index_D50 = math.floor(len(per_voxel_coverage) * 50 / 100)
-    
-    # Average the corresponding number of voxels  
-    D2 = np.sum(per_voxel_coverage[:index_D2]) / index_D2
-    D98 = np.sum(per_voxel_coverage[:index_D98]) / index_D98
-    D50 = np.sum(per_voxel_coverage[:index_D50]) / index_D50
+    # Compute coverages
+    D2 = np.percentile(masked_pred, 98)
+    D98 = np.percentile(masked_pred, 2)
+    D50 = np.percentile(masked_pred, 50)
     
     # Return homogeneity 1
     return (D2 - D98) / D50
@@ -85,29 +66,17 @@ def homogeneity_1(plan, tumor_segmentation_gy):
 ###############################################################################
 # Homogeneity 2 (Dose homogeneity index DHI) ~ 1
 ###############################################################################
-# - plan: 3D radiation plan
-# - tumor_segmentation_gy: 3D volume where 0->void, Gy->tumor
+# - prediction
+# - mask
 # returns homogeneity 2 = (D95 / D5)
-def homogeneity_2(plan, tumor_segmentation_gy):
+def homogeneity_2(prediction, mask):
     
-    ## Get non-zero indices from tumor_seg
-    non_zero = tumor_segmentation_gy.nonzero()
-    
-    ## For each voxel i in the plan where the tumor is
-    # Compute value_i / prescribed_i
-    per_voxel_coverage = plan[non_zero] / tumor_segmentation_gy[non_zero]
-    # Descending sort
-    per_voxel_coverage[::-1].sort()
-    
-    # Compute how many voxels to take
-    # 5%
-    index_D5 = math.floor(len(per_voxel_coverage) * 5 / 100)
-    # 95%
-    index_D95 = math.floor(len(per_voxel_coverage) * 95 / 100)
+    # Mask along the given entry
+    masked_pred = prediction.flatten()[(mask.flatten()).astype(bool)]
     
     # Average the corresponding number of voxels  
-    D5 = np.sum(per_voxel_coverage[:index_D5]) / index_D5
-    D95 = np.sum(per_voxel_coverage[:index_D95]) / index_D95
+    D5 = np.percentile(masked_pred, 95)
+    D95 = np.percentile(masked_pred, 5)
     
     # Return homogeneity 2
     return (D95 / D5)
@@ -119,30 +88,18 @@ def homogeneity_2(plan, tumor_segmentation_gy):
 ###############################################################################
 # PTV Coverage (DXX) ~ 1
 ###############################################################################
-# - plan: 3D radiation plan
-# - tumor_segmentation_gy: 3D volume where 0->void, Gy->tumor
+# - prediction
+# - mask
 # - coverage_value: 1 or 2 digit number corresponding to the coverage %
-# returns average coverage on XX% of the radiation sent to the tumor
-def ptv_coverage(plan, tumor_segmentation_gy, coverage_value):
+# - prescribed_value
+# returns coverage on XX% of the radiation sent to the tumor
+def ptv_coverage(prediction, mask, coverage_value, prescribed_value):
     
-    ## Get non-zero indices from tumor_seg
-    non_zero = tumor_segmentation_gy.nonzero()
+    # Mask along the given entry
+    masked_pred = prediction.flatten()[(mask.flatten()).astype(bool)]
     
-    ## For each voxel i in the plan where the tumor is
-    # Compute value_i / prescribed_i
-    per_voxel_coverage = plan[non_zero] / tumor_segmentation_gy[non_zero]
-    # Descending sort
-    per_voxel_coverage[::-1].sort()
-        
-    # Compute how many voxels to take
-    coverage_index = \
-        math.floor(len(per_voxel_coverage) * coverage_value / 100)
-    # Average the corresponding number of voxels    
-    average_coverage = \
-        np.sum(per_voxel_coverage[:coverage_index]) / coverage_index
-        
-    # Return average coverage on coverage_value% of the tumor
-    return average_coverage
+    # Compute coverages
+    return np.percentile(masked_pred, 100-coverage_value) / prescribed_value
 
 ###############################################################################
 # Max dose error against prescribed (whole plan) (Dmax)
@@ -225,6 +182,92 @@ def dose_spillage(plan, tumor_segmentation_bin, prescribed_dose):
     # Return dose spillage (V_50p_iso / TV)
     return (V_50p_iso / TV)
 
+###############################################################################
+# Dose score
+###############################################################################
+# - prediction
+# - reference
+# - possible dose mask (OpenKBP), body channel (CHUM)
+# returns the dose score (~MAE but normalized over number of non-zero voxels in mask)
+def dose_score(prediction, reference, mask):
+    
+    # From OpenKBP
+    # dose_score_vec[idx] = np.sum(np.abs(reference_dose - new_dose)) / np.sum(self.possible_dose_mask)
+    
+    # From my understanding of OpenKBP evaluation codes:
+    # - reference and prediction are taken as full volume
+    # - mask shows voxels with possible non-zero values for a dose (which
+    #   can be approximated by the body channel in the CHUM data)
+    # As a result, we don't compute a true average since reference and 
+    # prediction don't have the same number of entries as the denominator
+    # formed with mask.
+    return np.sum(np.abs(reference - prediction)) / np.sum(np.sum(mask))
+
+###############################################################################
+# DVH score
+###############################################################################
+# - prediction L*W*H
+# - reference L*W*H
+# - oar_channels L*W*H*channels
+# - tv_channels L*W*H*channels
+# - voxel size (OpenKBP), 1 (CHUM)
+# returns the dvh score
+def dvh_score(prediction, reference, oar_channels, tv_channels, voxel_size):
+    
+    # Setup dvh_lists
+    DVH_list_pred = []
+    DVH_list_ref = []
+    
+    # For each OAR
+    for oar_channel_number in range(oar_channels.shape[-1]):
+        
+        # Only non empty channels
+        if oar_channels[:, :, :, oar_channel_number].any():
+        
+            # Setup
+            oar_mask = (oar_channels[:, :, :, oar_channel_number].flatten()).astype(bool)
+            oar_prediction = prediction.flatten()[oar_mask]
+            oar_reference = reference.flatten()[oar_mask]
+            oar_size = len(oar_prediction)
+            
+            # Percentile on fractional volume in 0.1cc
+            voxels_in_tenth_of_cc = np.maximum(1, np.round(100/np.prod(voxel_size)))
+            fractional_volume_to_evaluate = 100 - np.minimum(0.99, voxels_in_tenth_of_cc/oar_size) * 100
+            DVH_list_pred.append(np.percentile(oar_prediction, fractional_volume_to_evaluate))
+            DVH_list_ref.append(np.percentile(oar_reference, fractional_volume_to_evaluate))
+            
+            # Mean dose
+            DVH_list_pred.append(oar_prediction.mean())
+            DVH_list_ref.append(oar_reference.mean())
+        
+    # For each TV
+    for tv_channel_number in range(tv_channels.shape[-1]):
+        
+        # Only non empty channels
+        if tv_channels[:, :, :, tv_channel_number].any():
+        
+            # Setup
+            tv_mask = (tv_channels[:, :, :, tv_channel_number].flatten()).astype(bool)
+            tv_prediction = prediction.flatten()[tv_mask]
+            tv_reference = reference.flatten()[tv_mask]
+            
+            # D99, 1st percentile
+            DVH_list_pred.append(np.percentile(tv_prediction, 1))
+            DVH_list_ref.append(np.percentile(tv_reference, 1))
+            
+            # D95, 5th percentile
+            DVH_list_pred.append(np.percentile(tv_prediction, 5))
+            DVH_list_ref.append(np.percentile(tv_reference, 5))
+            
+            # D1, 99th percentile
+            DVH_list_pred.append(np.percentile(tv_prediction, 99))
+            DVH_list_ref.append(np.percentile(tv_reference, 99))
+        
+        
+    # From OpenKBP
+    # dvh_score = np.nanmean(np.abs(self.reference_dose_metric_df - self.new_dose_metric_df).values)
+    return np.mean(np.abs(np.array(DVH_list_ref) - np.array(DVH_list_pred)))
+    
 # --------------------------------------------------------------------------- #
 # Visual - Excel > Insert > Chart > Statistical > Box and Whiskers
 # --------------------------------------------------------------------------- #
@@ -323,38 +366,6 @@ def max_dose_error_vs_reference(reference_plan, predicted_plan):
 def mean_dose_error_vs_reference(reference_plan, predicted_plan):
     
     return np.mean(predicted_plan) / np.mean(reference_plan)
-
-###############################################################################
-# PTV Coverage (DXX) - Percent error (between predicted and ref normalized with 
-# the prescribed dose ~ -5 to 5%
-###############################################################################
-# - plan: 3D radiation plan
-# - ref_plan
-# - tumor_segmentation_gy: 3D volume where 0->void, Gy->tumor
-# - coverage_value: 1 or 2 digit number corresponding to the coverage %
-# returns average coverage on XX% of the radiation sent to the tumor
-def ptv_coverage_percent_error(plan, ref_plan, tumor_segmentation_gy, coverage_value, prescribed_dose):
-    
-    ## Get non-zero indices from tumor_seg
-    non_zero = tumor_segmentation_gy.nonzero()
-    
-    ## For each voxel i in the plan where the tumor is
-    # Compute (value_i - ref_i) / prescribed_i
-    per_voxel_coverage = ((plan[non_zero] - ref_plan[non_zero]) / tumor_segmentation_gy[non_zero]) * 100
-    # Descending sort
-    per_voxel_coverage[::-1].sort()
-        
-    # Compute how many voxels to take
-    coverage_index = \
-        math.floor(len(per_voxel_coverage) * coverage_value / 100)
-    # Average the corresponding number of voxels    
-    average_coverage = \
-        np.sum(per_voxel_coverage[:coverage_index]) / coverage_index
-        
-    # Return average coverage on coverage_value% of the tumor
-    return average_coverage
-
-# 'error' = [(D_true - D_predict) / D_prescribed] * 100, Dmax, Dmean
 
 # --------------------------------------------------------------------------- #
 # Old
