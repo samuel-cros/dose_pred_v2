@@ -307,6 +307,10 @@ if args.test_mode == 'generate_predictions':
         # Masking using the body channel - CHUM dataset only
         if args.dataset == 'CHUM':    
             prediction *= np.expand_dims(dataset[id]['body'], axis=-1)
+
+        # Masking using the pdm channel - KBP dataset only
+        elif args.dataset == 'OpenKBP':
+            prediction *= dataset[id]['pdm'][0, :, :, :, :]
         
         print("Time spent predicting:", time.time() - t0)
         
@@ -1102,6 +1106,7 @@ elif args.test_mode == 'evaluate_predictions':
     if 'metrics_pred_rf.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_rf.csv')
     if 'metrics_pred_final.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_final.csv')
     if 'metrics_pred_last.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_last.csv')
+    if 'metrics_pred_last-save.csv' in list_of_predictions: list_of_predictions.remove('metrics_pred_last-save.csv')
 
     # Remove troubling cases
     if '7017044.npz' in list_of_predictions: list_of_predictions.remove('7017044.npz')
@@ -1131,6 +1136,7 @@ elif args.test_mode == 'evaluate_predictions':
                     unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
                                                         file))['arr_0'][:, :, :, 0],
                                     args.dataset)
+        # Old formatting
         except IndexError:
             plan = \
                     unstandardize_rd(np.load(os.path.join(path_to_predicted_volumes, 
@@ -1156,10 +1162,10 @@ elif args.test_mode == 'evaluate_predictions':
             voxel_size = (1.,1.,1.)
         elif args.dataset == 'OpenKBP':
             dose_score_mask = dataset[id]['pdm'][()]
-            #dose_score_mask = np.where(ref_plan > 0., 1., 0.) # TEMPORAIRE TODO
             tv_channels = dataset[id]['input'][:, :, :, 8:11]
             oar_channels = dataset[id]['input'][:, :, :, 1:8]
             voxel_size = dataset[id]['vox_dim'][()]
+            plan = np.multiply(plan, dose_score_mask[0, :, :, :, 0])
         tumor_segmentation_gy = tumor_segmentation_bin * prescribed_dose
         
         #######################################################################
