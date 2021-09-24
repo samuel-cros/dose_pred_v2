@@ -21,7 +21,7 @@ class DataGenerator(keras.utils.Sequence):
     'Generates data for Keras'
     def __init__(
         self, train_or_validation, list_IDs, patch_dim, batch_size, dataset, 
-        n_input_channels, n_output_channels, use_shared_encoder, shuffle=True, 
+        n_input_channels, n_output_channels, shuffle=True, 
         augmentation=False):
         'Initialization'
         self.patch_dim = patch_dim
@@ -32,7 +32,6 @@ class DataGenerator(keras.utils.Sequence):
         self.shuffle = shuffle
         self.augmentation = augmentation
         self.dataset = dataset
-        self.use_shared_encoder = use_shared_encoder
         self.on_epoch_end()
         if train_or_validation == 'validation' and not shuffle:
             self.shuffle_once()
@@ -91,12 +90,7 @@ class DataGenerator(keras.utils.Sequence):
             # Store sample
             X[i,] = self.dataset[ID]['input'] #[()]
 
-            if self.use_shared_encoder:
-                y[i,] = np.concatenate((np.expand_dims(self.dataset[ID]['dose'], axis=-1),
-                                       np.expand_dims(self.dataset[ID]['isodose'], axis=-1),
-                                       np.expand_dims(self.dataset[ID]['edges'], axis=-1)), axis=-1)
-            else:
-                y[i,] = np.expand_dims(self.dataset[ID]['dose'], axis=-1) #[()]
+            y[i,] = np.expand_dims(self.dataset[ID]['dose'], axis=-1) #[()]
 
         return X, y
 

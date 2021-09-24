@@ -24,26 +24,7 @@ inner_activation = 'relu' # leakyrelu
 
 ###############################################################################
 ## Subfunctions 
-###############################################################################
-# get_biggest_tv
-# - goal: get ptv, ctv or gtv (in that order) depending on availability
-# - input: input for a given patient where 
-#       - input[:, :, :, 1] is the ptv 1
-#       - input[:, :, :, 2] is the ctv 1
-#       - input[:, :, :, 3] is the gtv 1
-# - output: the available tv mask
-def get_biggest_tv(input_data):
-    if input_data[:, :, :, 1].any():
-        return input_data[:, :, :, 1]
-    else:
-        if input_data[:, :, :, 2].any():
-            return input_data[:, :, :, 2]
-        else:
-            if input_data[:, :, :, 3].any():
-                return input_data[:, :, :, 3]
-            else:
-                raise ValueError("Input should include at least one of " + \
-                    "the following: ptv 1, ctv 1 or gtv 1.")    
+############################################################################### 
     
 ## Consistency losses
 # > normalization / denormalization issue
@@ -233,18 +214,21 @@ def mse_dvh_closs_encapsulated(input_data, dataset):
 # --------------------------------------------------------------------------- #
 
 ###############################################################################
+###############################################################################
 ## Blocks 
+###############################################################################
 ###############################################################################
 
 ## Remarks
 # - inner_activation, batch_norm, dropout can be added as a parameter
 
 ###############################################################################
+# CONVOLUTIONS
+###############################################################################
 # Conv Block
 # - CONV-BN-ACTI * n_convolutions
-# - MaxPooling
 def conv_block(output_size, previous_layer, n_convolutions, inner_activation,
-               kernel_initializer, batch_norm, dropout):
+               kernel_initializer):
     # Convolve X times
     block = previous_layer
     for i in range(n_convolutions):
@@ -254,45 +238,72 @@ def conv_block(output_size, previous_layer, n_convolutions, inner_activation,
                        kernel_initializer = kernel_initializer)(block)
         block = BatchNormalization()(block)
         block = Activation(inner_activation)(block)
-        
-    # Pool
-    pool = MaxPooling3D(pool_size=(2,2,2))(block)
     
-    # Return 'block' for future skip connection and 'pool' for next layer
-    return block, pool
-
-###############################################################################
-# Up-Conv Block
-# - Upsample + CONV-BN-ACTI
-# - Concat + CONV-BN-ACTI * n_convolutions
-def up_conv_block(output_size, previous_layer, skip_connections_layer, 
-                  n_convolutions, activation, kernel_initializer, batch_norm, 
-                  dropout):
-    block = previous_layer
-    # Deconvolve
-    block = UpSampling3D(size = (2,2,2))(block)
-    block = Conv3DTranspose(output_size, 
-                            kernel_size = 3, 
-                            padding = 'same', 
-                            kernel_initializer = kernel_initializer)(block)
-    block = BatchNormalization()(block)
-    block = Activation(inner_activation)(block)
-    # Merge using concatenation
-    block = concatenate([skip_connections_layer, block], axis = 4)
-    # Convolve X times
-    for i in range(n_convolutions):
-        block = Conv3D(output_size, 
-                       kernel_size = 3, 
-                       padding = 'same', 
-                       kernel_initializer = kernel_initializer)(block)
-        block = BatchNormalization()(block)
-        block = Activation(inner_activation)(block)
-    # Return 'block' for next layer
+    # Return 'block' for future skip connection
     return block
 
 ###############################################################################
-# Up-Conv Block with attention - reviewed
-# source: https://github.com/lixiaolei1982/Keras-Implementation-of-U-Net-R2U-Net-Attention-U-Net-Attention-R2U-Net.-/blob/master/network.py
+# Dense convolution block
+# - (CONV-BN-ACTI + concat) * n_convolutions
+def dense_conv_block(output_size, previous_layer, n_convolutions, activation, 
+                     kernel_initializer):
+    # Dense convolve X times
+    block = previous_layer
+    for i in range(n_convolutions):
+        previous_data = block
+        block = Conv3D(output_size, 
+                       kernel_size = 3, 
+                       padding = 'same', 
+                       kernel_initializer = kernel_initializer)(block)
+        block = BatchNormalization()(block)
+        block = Activation(inner_activation)(block)
+        block = concatenate([previous_data, block])
+    
+    # Return 'block' for future skip connection
+    return block
+    
+###############################################################################
+# DOWNSAMPLING
+###############################################################################
+# Dense downsample block
+def dense_downsample(output_size, previous_layer, activation, 
+                     kernel_initializer):
+    # Dense pool
+    pool = MaxPooling3D(pool_size=(2,2,2))(previous_layer)
+    additional_conv = Conv3D(output_size, 
+                             kernel_size = 3,
+                             padding = 'same', 
+                             strides = 2,
+                             kernel_initializer = kernel_initializer)(previous_layer)
+    additional_conv = BatchNormalization()(additional_conv)
+    additional_conv = Activation(inner_activation)(additional_conv)
+    pool = concatenate([pool, additional_conv])
+    # Return 'pool' for next layer
+    return pool
+
+###############################################################################
+# UPSAMPLING
+###############################################################################
+# Upsample block
+# - Upsample + CONV-BN-ACTI + Concat
+def up_block(output_size, previous_layer, skip_connections_layer,
+             activation, kernel_initializer):
+    up = previous_layer
+    # Deconvolve
+    up = UpSampling3D(size = (2,2,2))(up)
+    up = Conv3DTranspose(output_size, 
+                            kernel_size = 3, 
+                            padding = 'same', 
+                            kernel_initializer = kernel_initializer)(up)
+    up = BatchNormalization()(up)
+    up = Activation(inner_activation)(up)
+    # Merge using concatenation
+    up = concatenate([skip_connections_layer, up], axis = 4)
+    
+    return up
+
+###############################################################################
+# Upsample attention Block
 # - Upsample + CONV on previous layer = phi_previous
 # - CONV on skip connection layer = theta_skip
 # - SUM(theta_skip, phi_previous) + RELU = f
@@ -300,15 +311,12 @@ def up_conv_block(output_size, previous_layer, skip_connections_layer,
 # - SIGMOID on psi_f = rate
 # - MUL(skip_connections_layer, rate) = attention
 # i.e skip_connection_layer modified by att
-# - resume with concatenation and convolutions
-def up_conv_block_att(output_size, previous_layer, skip_connections_layer, 
-                  n_convolutions, activation, kernel_initializer, batch_norm, 
-                  dropout):
+# - resume with concatenation
+def up_att_block(output_size, previous_layer, skip_connections_layer, 
+                  activation, kernel_initializer):
     block = previous_layer
     # Deconvolve
     block = UpSampling3D(size = (2,2,2))(block)
-    
-    # Fully deconvolve?
     block = Conv3DTranspose(output_size, 
                             kernel_size = 3, 
                             padding = 'same', 
@@ -341,58 +349,17 @@ def up_conv_block_att(output_size, previous_layer, skip_connections_layer,
     
     # Merge using concatenation
     block = concatenate([attention, block], axis = 4)
-    # Convolve X times
-    for i in range(n_convolutions):
-        block = Conv3D(output_size, 
-                       kernel_size = 3, 
-                       padding = 'same', 
-                       kernel_initializer = kernel_initializer)(block)
-        block = BatchNormalization()(block)
-        block = Activation(inner_activation)(block)
-    # Return 'block' for next layer
+    
     return block
 
 ###############################################################################
-# Conv Block with dense elements
-# - (CONV-BN-ACTI + concat) * n_convolutions
-# - MaxPooling
-def dense_conv_block(output_size, previous_layer, n_convolutions, activation, 
-                     kernel_initializer, batch_norm, dropout):
-    # Dense convolve X times
-    block = previous_layer
-    for i in range(n_convolutions):
-        previous_data = block
-        block = Conv3D(output_size, 
-                       kernel_size = 3, 
-                       padding = 'same', 
-                       kernel_initializer = kernel_initializer)(block)
-        
-        block = BatchNormalization()(block)
-        block = Activation(inner_activation)(block)
-        
-        block = concatenate([previous_data, block])
-    # Dense pool
-    pool = MaxPooling3D(pool_size=(2,2,2))(block)
-    additional_conv = Conv3D(output_size, 
-                             kernel_size = 3,
-                             padding = 'same', 
-                             strides = 2,
-                             kernel_initializer = kernel_initializer)(block)
-    additional_conv = BatchNormalization()(additional_conv)
-    additional_conv = Activation(inner_activation)(additional_conv)
-    pool = concatenate([pool, additional_conv])
-    # Return 'block' for future skip connection and 'pool' for next layer
-    return block, pool
-###############################################################################
-
 ###############################################################################
 ## Net
 ###############################################################################
-
 ###############################################################################
 # UNET
-def unet_3D(input_size, n_output_channels, dropout_value,
-            n_convolutions_per_block, optim, lr, loss, final_activation):
+def unet_3D(input_size, n_output_channels, n_convolutions_per_block, optim, 
+            lr, loss, final_activation):
     inputs = Input(input_size)
 
     ###########################################################################
@@ -400,41 +367,44 @@ def unet_3D(input_size, n_output_channels, dropout_value,
     ###########################################################################
     
     # x32 layers going down
-    conv32, pool32 = conv_block(32, inputs, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm,
-                                dropout_value)
+    conv32 = conv_block(32, inputs, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool32 = MaxPooling3D(pool_size=(2,2,2))(conv32)
+    
     # x64 layers going down
-    conv64, pool64 = conv_block(64, pool32, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm, 
-                                dropout_value)
+    conv64 = conv_block(64, pool32, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool64 = MaxPooling3D(pool_size=(2,2,2))(conv64)
+    
     # x128 layers going down
-    conv128, pool128 = conv_block(128, pool64, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv128 = conv_block(128, pool64, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool128 = MaxPooling3D(pool_size=(2,2,2))(conv128)
+    
     # x256 layers going down
-    conv256, pool256 = conv_block(256, pool128, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv256 = conv_block(256, pool128, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool256 = MaxPooling3D(pool_size=(2,2,2))(conv256)
+    
     # x512 layers (twice as many convolutions)
-    conv512, pool512 = conv_block(512, pool256, n_convolutions_per_block*2, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv512 = conv_block(512, pool256, n_convolutions_per_block*2, 
+                                  inner_activation, kernel_value)
     # x256 layers going up
-    deconv256 = up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
-                              inner_activation, kernel_value, batch_norm, 
-                              dropout_value)
+    up256 = up_block(256, conv512, conv256, inner_activation, kernel_value)
+    deconv256 = conv_block(256, up256, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x128 layers going up
-    deconv128 = up_conv_block(128, deconv256, conv128, 
-                              n_convolutions_per_block, inner_activation, 
-                              kernel_value, batch_norm, dropout_value)
+    up128 = up_block(128, deconv256, conv128, inner_activation, kernel_value)
+    deconv128 = conv_block(128, up128, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x64 layers going up
-    deconv64 = up_conv_block(64, deconv128, conv64, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
+    up64 = up_block(64, deconv128, conv64, inner_activation, kernel_value)
+    deconv64 = conv_block(64, up64, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
     # x32 layers going up
-    deconv32 = up_conv_block(32, deconv64, conv32, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
+    up32 = up_block(32, deconv64, conv32, inner_activation, kernel_value)
+    deconv32 = conv_block(32, up32, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
 
     # Output
     convFIN = Conv3D(n_output_channels, 
@@ -457,7 +427,7 @@ def unet_3D(input_size, n_output_channels, dropout_value,
     else:
         raise NameError('Unknown optimizer.')
     
-    model.summary()
+    model.summary(line_length=130)
 
     return model
 
@@ -474,48 +444,51 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
     ###########################################################################
     
     # x32 layers going down
-    conv32, pool32 = conv_block(32, inputs, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm,
-                                dropout_value)
+    conv32 = conv_block(32, inputs, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool32 = MaxPooling3D(pool_size=(2,2,2))(conv32)
+    
     # x64 layers going down
-    conv64, pool64 = conv_block(64, pool32, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm, 
-                                dropout_value)
+    conv64 = conv_block(64, pool32, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool64 = MaxPooling3D(pool_size=(2,2,2))(conv64)
+    
     # x128 layers going down
-    conv128, pool128 = conv_block(128, pool64, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv128 = conv_block(128, pool64, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool128 = MaxPooling3D(pool_size=(2,2,2))(conv128)
+    
     # x256 layers going down
-    conv256, pool256 = conv_block(256, pool128, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv256 = conv_block(256, pool128, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool256 = MaxPooling3D(pool_size=(2,2,2))(conv256)
+    
     # x512 layers (twice as many convolutions)
-    conv512, pool512 = conv_block(512, pool256, n_convolutions_per_block*2, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv512 = conv_block(512, pool256, n_convolutions_per_block*2, 
+                                  inner_activation, kernel_value)
     
     # Manage attention
     if use_attention:
-        current_up_conv_block = up_conv_block_att
+        current_up_block = up_att_block
     else:  
-        current_up_conv_block = up_conv_block
+        current_up_block = up_block
     
     # x256 layers going up
-    deconv256 = current_up_conv_block(256, conv512, conv256, n_convolutions_per_block, 
-                                      inner_activation, kernel_value, batch_norm, 
-                                      dropout_value)
+    up256 = current_up_block(256, conv512, conv256, inner_activation, kernel_value)
+    deconv256 = conv_block(256, up256, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x128 layers going up
-    deconv128 = current_up_conv_block(128, deconv256, conv128, 
-                                      n_convolutions_per_block, inner_activation, 
-                                      kernel_value, batch_norm, dropout_value)
+    up128 = current_up_block(128, deconv256, conv128, inner_activation, kernel_value)
+    deconv128 = conv_block(128, up128, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x64 layers going up
-    deconv64 = current_up_conv_block(64, deconv128, conv64, n_convolutions_per_block, 
-                                     inner_activation, kernel_value, batch_norm, 
-                                     dropout_value)
+    up64 = current_up_block(64, deconv128, conv64, inner_activation, kernel_value)
+    deconv64 = conv_block(64, up64, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
     # x32 layers going up
-    deconv32 = current_up_conv_block(32, deconv64, conv32, n_convolutions_per_block, 
-                                     inner_activation, kernel_value, batch_norm, 
-                                     dropout_value)
+    up32 = current_up_block(32, deconv64, conv32, inner_activation, kernel_value)
+    deconv32 = conv_block(32, up32, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
 
     # Output
     convFIN = Conv3D(n_output_channels, 
@@ -550,7 +523,7 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
         
     # DVH C-Loss
     elif use_dvh_closs:
-        mode.compile(optimizer = optimizer,
+        model.compile(optimizer = optimizer,
                      loss = mse_dvh_closs_encapsulated(inputs, dataset),
                      metrics = [mse_dvh_closs_encapsulated(inputs, dataset)])
     
@@ -559,7 +532,7 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
         model.compile(optimizer = optimizer, loss = loss, 
                       metrics = [loss])
     
-    model.summary()
+    model.summary(line_length=130)
 
     return model
 
@@ -575,48 +548,51 @@ def ablation_hdunet_3D(input_size, n_output_channels, dropout_value,
     # Idea: fixed CONV 16 + Concat previous data
     
     # x32 layers going down
-    conv32, pool32 = dense_conv_block(16, inputs, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm, 
-                                dropout_value)
+    conv32 = dense_conv_block(16, inputs, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool32 = dense_downsample(16, conv32, inner_activation, kernel_value)
+    
     # x64 layers going down
-    conv64, pool64 = dense_conv_block(16, pool32, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm, 
-                                dropout_value)
+    conv64 = dense_conv_block(16, pool32, n_convolutions_per_block, 
+                                inner_activation, kernel_value)
+    pool64 = dense_downsample(16, conv64, inner_activation, kernel_value)
+    
     # x128 layers going down
-    conv128, pool128 = dense_conv_block(16, pool64, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv128 = dense_conv_block(16, pool64, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool128 = dense_downsample(16, conv128, inner_activation, kernel_value)
+    
     # x256 layers going down
-    conv256, pool256 = dense_conv_block(16, pool128, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv256 = dense_conv_block(16, pool128, n_convolutions_per_block, 
+                                  inner_activation, kernel_value)
+    pool256 = dense_downsample(16, conv256, inner_activation, kernel_value)
+    
     # x512 layers (twice as many convolutions)
-    conv512, pool512 = dense_conv_block(16, pool256, n_convolutions_per_block*2, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
+    conv512 = dense_conv_block(16, pool256, n_convolutions_per_block*2, 
+                                  inner_activation, kernel_value)
     
     # Manage attention
     if use_attention:
-        current_up_conv_block = up_conv_block_att
+        current_up_block = up_att_block
     else:  
-        current_up_conv_block = up_conv_block
+        current_up_block = up_block
     
     # x256 layers going up
-    deconv256 = current_up_conv_block(16, conv512, conv256, n_convolutions_per_block, 
-                                      inner_activation, kernel_value, batch_norm, 
-                                      dropout_value)
+    up256 = current_up_block(64, conv512, conv256, inner_activation, kernel_value)
+    deconv256 = dense_conv_block(16, up256, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x128 layers going up
-    deconv128 = current_up_conv_block(16, deconv256, conv128, n_convolutions_per_block, 
-                                      inner_activation, kernel_value, batch_norm, 
-                                      dropout_value)
+    up128 = current_up_block(64, deconv256, conv128, inner_activation, kernel_value)
+    deconv128 = dense_conv_block(16, up128, n_convolutions_per_block, 
+                              inner_activation, kernel_value)
     # x64 layers going up
-    deconv64 = current_up_conv_block(16, deconv128, conv64, n_convolutions_per_block, 
-                                     inner_activation, kernel_value, batch_norm, 
-                                     dropout_value)
+    up64 = current_up_block(64, deconv128, conv64, inner_activation, kernel_value)
+    deconv64 = dense_conv_block(16, up64, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
     # x32 layers going up
-    deconv32 = current_up_conv_block(16, deconv64, conv32, n_convolutions_per_block, 
-                                     inner_activation, kernel_value, batch_norm, 
-                                     dropout_value)
+    up32 = current_up_block(64, deconv64, conv32, inner_activation, kernel_value)
+    deconv32 = dense_conv_block(16, up32, n_convolutions_per_block, 
+                             inner_activation, kernel_value)
 
     # Output
     convFIN = Conv3D(n_output_channels, 
@@ -651,7 +627,7 @@ def ablation_hdunet_3D(input_size, n_output_channels, dropout_value,
         
     # DVH C-Loss
     elif use_dvh_closs:
-        mode.compile(optimizer = optimizer,
+        model.compile(optimizer = optimizer,
                      loss = mse_dvh_closs_encapsulated(inputs, dataset),
                      metrics = [mse_dvh_closs_encapsulated(inputs, dataset)])
     
@@ -660,149 +636,8 @@ def ablation_hdunet_3D(input_size, n_output_channels, dropout_value,
         model.compile(optimizer = optimizer, loss = loss, 
                       metrics = [loss])
     
-    model.summary()
+    model.summary(line_length=130)
 
     return model
 
 ###############################################################################
-# BRANCH UNET
-def branch_unet_3D(input_size, n_output_channels, dropout_value,
-                   n_convolutions_per_block, optim, lr, loss, final_activation,
-                   use_attention):
-    inputs = Input(input_size)
-
-    ###########################################################################
-    ## Architecture
-    ###########################################################################
-    
-    # x32 layers going down
-    conv32, pool32 = conv_block(32, inputs, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm,
-                                dropout_value)
-    # x64 layers going down
-    conv64, pool64 = conv_block(64, pool32, n_convolutions_per_block, 
-                                inner_activation, kernel_value, batch_norm, 
-                                dropout_value)
-    # x128 layers going down
-    conv128, pool128 = conv_block(128, pool64, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
-    # x256 layers going down
-    conv256, pool256 = conv_block(256, pool128, n_convolutions_per_block, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
-    # x512 layers (twice as many convolutions)
-    conv512, pool512 = conv_block(512, pool256, n_convolutions_per_block*2, 
-                                  inner_activation, kernel_value, batch_norm, 
-                                  dropout_value)
-    
-    # BRANCH A
-    # - dose prediction
-    
-    # x256 layers going up
-    deconv256_dose = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
-                              inner_activation, kernel_value, batch_norm, 
-                              dropout_value)
-    # x128 layers going up
-    deconv128_dose = up_conv_block_att(128, deconv256_dose, conv128, 
-                              n_convolutions_per_block, inner_activation, 
-                              kernel_value, batch_norm, dropout_value)
-    # x64 layers going up
-    deconv64_dose = up_conv_block_att(64, deconv128_dose, conv64, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-    # x32 layers going up
-    deconv32_dose = up_conv_block_att(32, deconv64_dose, conv32, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-
-    # Output
-    convFIN_dose = Conv3D(n_output_channels, 
-                          kernel_size = 1, 
-                          activation = final_activation)(deconv32_dose)
-    
-    # BRANCH B
-    # - isodose prediction
-    
-    # x256 layers going up
-    deconv256_isodose = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
-                              inner_activation, kernel_value, batch_norm, 
-                              dropout_value)
-    # x128 layers going up
-    deconv128_isodose = up_conv_block_att(128, deconv256_isodose, conv128, 
-                              n_convolutions_per_block, inner_activation, 
-                              kernel_value, batch_norm, dropout_value)
-    # x64 layers going up
-    deconv64_isodose = up_conv_block_att(64, deconv128_isodose, conv64, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-    # x32 layers going up
-    deconv32_isodose = up_conv_block_att(32, deconv64_isodose, conv32, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-
-    # Output
-    convFIN_isodose = Conv3D(n_output_channels, 
-                             kernel_size = 1, 
-                             activation = final_activation)(deconv32_isodose)
-    
-    # BRANCH C
-    # - edges prediction
-    
-    # x256 layers going up
-    deconv256_edges = up_conv_block_att(256, conv512, conv256, n_convolutions_per_block, 
-                              inner_activation, kernel_value, batch_norm, 
-                              dropout_value)
-    # x128 layers going up
-    deconv128_edges = up_conv_block_att(128, deconv256_edges, conv128, 
-                              n_convolutions_per_block, inner_activation, 
-                              kernel_value, batch_norm, dropout_value)
-    # x64 layers going up
-    deconv64_edges = up_conv_block_att(64, deconv128_edges, conv64, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-    # x32 layers going up
-    deconv32_edges = up_conv_block_att(32, deconv64_edges, conv32, n_convolutions_per_block, 
-                             inner_activation, kernel_value, batch_norm, 
-                             dropout_value)
-
-    # Output
-    convFIN_edges = Conv3D(n_output_channels, 
-                             kernel_size = 1, 
-                             activation = final_activation)(deconv32_edges)
-
-    ###########################################################################
-    ## Model
-    ###########################################################################
-    model = Model(inputs = inputs, outputs = [convFIN_dose, 
-                                              convFIN_isodose, 
-                                              convFIN_edges])
-    
-    # Losses and loss weights
-    custom_loss = {'convFIN_dose': loss, 
-                   'convFIN_isodose': 'SparseCategoricalCrossentropy', 
-                   'convFIN_edges': loss}
-    
-    custom_loss_weights = {'convFIN_dose': 1, 
-                           'convFIN_isodose': 1, 
-                           'convFIN_edges': 1} 
-
-    # edges might be harder to predict, so its weight could start high and then decrease
-
-    # Manage optimizer, add loss and metric(s)
-    if optim == 'adam':
-        model.compile(optimizer = Adam(lr = lr), 
-                      loss = custom_loss, 
-                      loss_weights = custom_loss_weights,
-                      metrics = custom_loss)
-    elif optim == 'rmsprop':
-        model.compile(optimizer = RMSprop(lr = lr), 
-                      loss = custom_loss, 
-                      loss_weights = custom_loss_weights,
-                      metrics = custom_loss)
-    else:
-        raise NameError('Unknown optimizer.')
-    
-    model.summary()
-
-    return model

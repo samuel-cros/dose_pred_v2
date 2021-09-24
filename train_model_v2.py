@@ -62,7 +62,7 @@ parser.add_argument('-ids', '--path_to_ids', type=str, required=False,
 parser.add_argument('-o', '--optim', type=str, required=True,
                     help='Optimizer')
 parser.add_argument('-lr', type=float, required=True, help='Learning rate')
-parser.add_argument('-drop', '--dropout_value', type=float, required=True,
+parser.add_argument('-drop', '--dropout_value', type=float, required=False,
                     help='Dropout')
 parser.add_argument('-e', '--n_epochs', type=int, required=True,
                     help='Number of epochs')
@@ -77,8 +77,6 @@ parser.add_argument('-use_hdunet', action='store_true',
                     help='Use the HD version of the U-Net')
 parser.add_argument('-use_attention', action='store_true', 
                     help='Use the attention version of the U-Net')
-parser.add_argument('-use_shared_encoder', action='store_true', 
-                    help='Use the shared-encoder version of the U-Net')
 parser.add_argument('-use_closs', '--use_consistency_losses', action='store_true', 
                     help='Use additional consistency losses')
 parser.add_argument('-use_dvh_loss', action='store_true', 
@@ -91,7 +89,7 @@ parser.add_argument('-dset', '--dataset', type=str, required=True,
 # Additional defaults
 parser.set_defaults(augmentation=False, use_hdunet=False, use_attention=False,
                     use_consistency_losses=False, use_dvh_loss=False, use_closs=False,
-                    use_shared_encoder=False, use_dvh_closs=False)
+                    use_dvh_closs=False, dropout_value=0.0)
 args = parser.parse_args()
 
 ## Seeding
@@ -172,10 +170,7 @@ elif args.dataset == 'OpenKBP':
 else:
     raise ValueError("Unknown dataset. Handled dataset are CHUM and OpenKBP")
 
-if args.use_shared_encoder:
-    n_output_channels = 3
-else:
-    n_output_channels = 1
+n_output_channels = 1
     
 n_convolutions = 2 # per block
 
@@ -184,7 +179,6 @@ training_params = {'patch_dim': (128, 128, None),
           'dataset': h5_dataset_training,
           'n_input_channels': n_input_channels,
           'n_output_channels': n_output_channels,
-          'use_shared_encoder': args.use_shared_encoder,
           'shuffle': True,
           'augmentation': args.augmentation}
 
@@ -193,7 +187,6 @@ validation_params = {'patch_dim': (128, 128, None),
           'dataset': h5_dataset_validation,
           'n_input_channels': n_input_channels,
           'n_output_channels': n_output_channels,
-          'use_shared_encoder': args.use_shared_encoder,
           'shuffle': False,
           'augmentation': False}
 
@@ -215,10 +208,6 @@ if args.use_hdunet:
                       args.final_activation, args.dataset, args.use_attention,
                       args.use_consistency_losses, args.use_dvh_loss, 
                       args.use_dvh_closs)
-elif args.use_shared_encoder:
-    model = branch_unet_3D(input_shape, n_output_channels, args.dropout_value, 
-                             n_convolutions, args.optim, args.lr, args.loss,
-                             args.final_activation, args.use_attention)
 else:
     model = ablation_unet_3D(input_shape, n_output_channels, args.dropout_value, 
                              n_convolutions, args.optim, args.lr, args.loss,
