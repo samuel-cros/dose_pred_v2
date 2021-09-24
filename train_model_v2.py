@@ -14,6 +14,7 @@ from keras.models import load_model
 import tensorflow as tf
 from keras.layers import *
 from unet_model_v2 import unet_3D, ablation_unet_3D, ablation_hdunet_3D #, load_pretrained_weights
+from unet_model_v2 import mse_dvh_loss_encapsulated
 
 # IO
 import argparse
@@ -84,7 +85,7 @@ parser.add_argument('-use_dvh_loss', action='store_true',
                     help='Use additional DVH loss')
 parser.add_argument('-use_dvh_closs', action='store_true', 
                     help='Use additional DVH-CLoss loss')
-parser.add_argument('-dset', '--dataset', type=str, required=False,
+parser.add_argument('-dset', '--dataset', type=str, required=True,
                     help='Two kinds of supported dataset: CHUM or OpenKBP')
 
 # Additional defaults
@@ -228,7 +229,13 @@ else:
 
 # Load pretrained model
 if args.initial_weights is not None:
-    model = load_model(args.initial_weights)
+
+    if args.use_dvh_loss:
+        model = load_model(args.initial_weights, 
+                           custom_objects={'mse_dvh_loss': mse_dvh_loss_encapsulated(tf.zeros((1, 128, 128, 128, 21)), args.dataset)})
+
+    else:
+        model = load_model(args.initial_weights)
 
 # Callbacks
 mc_validation_loss = ModelCheckpoint(os.path.join(path_to_generated_files, 
