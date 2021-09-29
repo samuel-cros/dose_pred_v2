@@ -463,8 +463,14 @@ def ablation_unet_3D(input_size, n_output_channels, dropout_value,
                                   inner_activation, kernel_value)
     pool256 = MaxPooling3D(pool_size=(2,2,2))(conv256)
     
+    # Manage number of convolutions
+    if use_attention:
+        current_n_convolutions_for_deeper_layer = n_convolutions_per_block
+    else:
+        current_n_convolutions_for_deeper_layer = n_convolutions_per_block*2
+    
     # x512 layers (twice as many convolutions)
-    conv512 = conv_block(512, pool256, n_convolutions_per_block*2, 
+    conv512 = conv_block(512, pool256, current_n_convolutions_for_deeper_layer, 
                                   inner_activation, kernel_value)
     
     # Manage attention
