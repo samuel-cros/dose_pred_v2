@@ -42,7 +42,7 @@ Launches testing and generates metrics scores per patient and averages across a 
 * __use_dvh_loss__ : A flag ensuring we use the DVH loss variant.
 * __use_dvh_closs__ : A flag ensuring we use the DVH Consistency loss variant.
 
-### Data gen (data_gen_v2.py) ###
+### Data generator (data_gen_v2.py) ###
 
 Redefinition of keras.utils.Sequence DataGenerator.
 
@@ -62,7 +62,7 @@ Folder containing a data standardization script to (de)normalize inputs and outp
 
 Folder containing an example of job launched on a proxy calculation server.
 
-### Data generation (data_generation/) ###
+### Data preparation and generation (data_generation/) ###
 
 A folder containing ids folders, groundtruth metrics and scripts used during data preparation. 
 
