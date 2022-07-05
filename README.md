@@ -18,7 +18,7 @@ Launches training and generates model weights, Dice values (.npy) and curves (.p
 * __e__, __n_epochs__ : An integer specifying the number of epochs.
 * __seed__ : An integer specifying the seed for numpy and tensorflow operations to ensure reproductibility.
 * __loss__ : A string specifying the loss to use for training (e.g mse, mae, rmse).
-* __final_activation__ : An string specifying the kind of final activation to use in the fully connected layer (e.g sigmoid, linear, tanh).
+* __final_activation__ : A string specifying the kind of final activation to use in the fully connected layer (e.g sigmoid, linear, tanh).
 * __use_hdunet__ : A flag ensuring we use the HD U-Net model variant.
 * __use_attention__ : A flag ensuring we use the Attention U-Net model variant.
 * __use_closs__ : A flag ensuring we use the consistency loss variant.
@@ -32,9 +32,9 @@ Launches testing and generates metrics scores per patient and averages across a 
 
 #### Arguments ####
 
-* __mode__, __test_mode__ : An string specifying the test mode (supported test modes: 'generate_predictions' and 'evaluate_predictions').
+* __mode__, __test_mode__ : A string specifying the test mode (supported test modes: 'generate_predictions' and 'evaluate_predictions').
 * __path__, __path_to_model_folder__ : A string specifiying the path to the model folder where the model file is located and where outpus will be generated.
-* __mname__, __model_name__ : An string specifying the name of the model file.
+* __mname__, __model_name__ : A string specifying the name of the model file.
 * __dset__ : A string specifying the dataset we are using (supported datasets: 'CHUM' and 'OpenKBP').
 * __set__, __kind_of_set__ : A string specifying the set to generated for (either 'train', 'validation', 'test' or 'manual').
 * __ids__, __list_of_ids__ : Multiple strings specifying the IDs of patients to be tested (required when set is 'manual').
