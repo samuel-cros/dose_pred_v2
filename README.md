@@ -1,4 +1,4 @@
-# CHUM H&N segmentation project #
+# Dose plan prediction project #
 
 This repository contains a significant part of the final set of codes that allowed me to produce 3D dose plans for Head and Neck (H&N) cancer patients on two datasets during my Master's: a dataset provided by the Centre Hospitalier de l'Université de Montréal (CHUM) and a public dataset available under the OpenKBP challenge.
 
